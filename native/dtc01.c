@@ -105,7 +105,14 @@ struct dtc01 {
 /* Factory-default X2212 NVRAM image. Decoded from the ROM's own embedded
  * copy at main-CPU address 0x1A7AE (DESIGN.md s10 verified this matches
  * byte-for-byte); a blank/zeroed NVRAM routes the firmware into an "NVR
- * FAULT" setup dead-end instead of normal operation. */
+ * FAULT" setup dead-end instead of normal operation.
+ *
+ * Decoded from v2.0. MAME's notes say v1.8 expects a different image, and
+ * v1.8's copy is not at 0x1A7AE. It stays hardcoded anyway: v1.8 boots to
+ * the same LED state and host prompt with this image and speaks correctly,
+ * and the NVRAM was ruled out as the cause of its old audio bug (that was
+ * the DAC-tick scheduling, DESIGN.md s21). Whether the config this decodes
+ * to is *right* for v1.8 is still unverified. */
 static const uint8_t DEFAULT_NVRAM_OFFSETS[] = {
     0x00, 0x04, 0x08, 0x0C, 0x10, 0x14, 0x18, 0x1C,
     0x20, 0x24, 0x28, 0x2C, 0xFC, 0xFD, 0xFE, 0xFF
@@ -612,26 +619,54 @@ DTC01_API int dtc01_run_samples(dtc01_t *m, int16_t *out, int max_samples)
 
         /* DSP: exactly one cycle per M68K_PER_DSP 68000 cycles. tms_run
          * returns the unspent budget (<= 0, an overshoot); as before it
-         * replaces the debt rather than adding to it. */
-        m->dsp_half_debt += cycles;
-        if (!m->dsp.in_reset) {
-            spent = m->dsp_half_debt / M68K_PER_DSP;
-            if (spent > 0)
-                m->dsp_half_debt = tms_run(&m->dsp, spent) * M68K_PER_DSP;
-        }
+         * replaces the debt rather than adding to it.
+         *
+         * The cycles are handed over in chunks that stop at each DAC-tick
+         * boundary, so the DSP never runs *past* a tick before the tick is
+         * delivered. Capping `budget` above is not enough: m68k_execute()
+         * finishes the instruction in progress, so `cycles` overshoots the
+         * boundary by most of an instruction. The DAC tick is what asserts
+         * the DSP's outfifo interrupt, and v1.8's DSP times out if that
+         * interrupt is late -- it has only ~146 cycles of slack (DESIGN.md
+         * s21) -- whereupon it raises a soft error, the firmware takes its
+         * resend path, and the audio shreds. MAME gets this from
+         * `config.m_perfect_cpu_quantum = subtag("dsp")`. v2.0's DSP has a
+         * laxer wait and is bit-identical either way. */
+        {
+            int remaining = cycles;
+            while (remaining > 0) {
+                int chunk = remaining;
+                if (m->dac_debt < M68K_PER_DAC) {
+                    int until_tick = M68K_PER_DAC - m->dac_debt;
+                    if (until_tick < chunk) chunk = until_tick;
+                }
 
-        m->dac_debt += cycles;
-        while (m->dac_debt >= M68K_PER_DAC && produced < max_samples) {
-            uint16_t raw;
-            int16_t pcm;
-            m->dac_debt -= M68K_PER_DAC;
-            raw = dsp_pop_outfifo(m);
-            /* raw is the offset-binary DAC word; ^0x8000 recovers signed
-             * PCM (see dtc01.h). */
-            pcm = (int16_t)(uint16_t)(raw ^ 0x8000);
-            if (m->volume < 100)
-                pcm = (int16_t)(((int32_t)pcm * m->volume) / 100);
-            out[produced++] = pcm;
+                m->dsp_half_debt += chunk;
+                if (!m->dsp.in_reset) {
+                    spent = m->dsp_half_debt / M68K_PER_DSP;
+                    if (spent > 0)
+                        m->dsp_half_debt = tms_run(&m->dsp, spent) * M68K_PER_DSP;
+                }
+
+                m->dac_debt += chunk;
+                remaining -= chunk;
+
+                /* If the caller's buffer is full the tick stays owed in
+                 * dac_debt and is drained on the next call -- the guard above
+                 * then stops splitting, so this cannot spin. */
+                while (m->dac_debt >= M68K_PER_DAC && produced < max_samples) {
+                    uint16_t raw;
+                    int16_t pcm;
+                    m->dac_debt -= M68K_PER_DAC;
+                    raw = dsp_pop_outfifo(m);
+                    /* raw is the offset-binary DAC word; ^0x8000 recovers
+                     * signed PCM (see dtc01.h). */
+                    pcm = (int16_t)(uint16_t)(raw ^ 0x8000);
+                    if (m->volume < 100)
+                        pcm = (int16_t)(((int32_t)pcm * m->volume) / 100);
+                    out[produced++] = pcm;
+                }
+            }
         }
     }
     return produced;

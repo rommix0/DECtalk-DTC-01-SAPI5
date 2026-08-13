@@ -179,15 +179,16 @@ class SystemBus:
 
 
 class DectalkMachine:
-	def __init__(self, rom_dir: str, on_audio_sample: Callable[[int], None], on_host_tx: Callable[[int], None]):
+	def __init__(self, rom_dir: str, on_audio_sample: Callable[[int], None], on_host_tx: Callable[[int], None],
+	             rom_version: str | None = None):
 		"""on_audio_sample(sample) is called once per 10kHz DAC tick with the
 		12-bit-ish DAC word (already through the '((data&0xfff0)^0x8000)'
 		transform -- see DESIGN.md section 5). on_host_tx(byte) is called
 		for every byte the firmware transmits back on the host serial link
 		(channel B) -- present for completeness/future protocol needs, even
 		though this firmware has no [:index] to report (DESIGN.md section 6)."""
-		main_image = rom_loader.build_main_cpu_image(rom_dir)
-		dsp_words = rom_loader.dsp_words(rom_dir)
+		self.rom_version = rom_loader.resolve_version(rom_version)
+		main_image, dsp_words = rom_loader.build_images(rom_dir, self.rom_version)
 
 		self._on_audio_sample = on_audio_sample
 		self._on_host_tx = on_host_tx
@@ -205,6 +206,11 @@ class DectalkMachine:
 		self.spc_error_latch = False
 		self.spc_flags_latch = 0  # bit0: speech-init, bit6: spc-irq-enable
 		self.tlc_flags_latch = 0
+		# NB: _DEFAULT_NVRAM was decoded from the v2.0 ROM's own embedded copy.
+		# MAME's driver notes say v1.8 expects a different image; v1.8 boots
+		# and speaks correctly with this one anyway, and the NVRAM was ruled
+		# out as the cause of v1.8's old audio bug (DESIGN.md §21). Whether
+		# the config it decodes to is *right* for v1.8 is still unverified.
 		self.nvram = bytearray(_DEFAULT_NVRAM)
 		self.led_state = 0
 		self._simulate_outfifo_error = False
@@ -431,15 +437,35 @@ class DectalkMachine:
 
 			self.duart.step(cycles / M68K_HZ)
 
-			self._dsp_half_debt += cycles
-			if not self.dsp.in_reset:
-				spent = self._dsp_half_debt // M68K_PER_DSP
-				if spent > 0:
-					overshoot = self.dsp.run(spent)  # <= 0
-					self._dsp_half_debt = overshoot * M68K_PER_DSP
+			# Split the 68000 instruction's cycles at DAC-tick boundaries so
+			# the DSP never runs *past* a tick before the tick is delivered.
+			# The tick is what asserts the DSP's outfifo interrupt, and v1.8's
+			# DSP program times out if that interrupt is late: it waits for it
+			# in a 20-iteration loop (~180 cycles) entered ~354 cycles into a
+			# 500-cycle sample period, so barely ~146 cycles of slack. Running
+			# the DSP for a whole 68000 instruction first could overshoot that
+			# and make the DSP declare a soft error, which puts the firmware
+			# on its resend path and shreds the audio (DESIGN.md §21). MAME
+			# avoids this with `config.m_perfect_cpu_quantum = subtag("dsp")`;
+			# this is the same guarantee expressed in our cycle arithmetic.
+			# v2.0's DSP has a laxer wait and is bit-identical either way.
+			remaining = cycles
+			while remaining > 0:
+				chunk = remaining
+				until_tick = M68K_PER_DAC - self._dac_debt
+				if until_tick < chunk:
+					chunk = until_tick
 
-			self._dac_debt += cycles
-			while self._dac_debt >= M68K_PER_DAC:
-				self._dac_debt -= M68K_PER_DAC
-				sample = self._dsp_pop_outfifo()
-				self._on_audio_sample(sample)
+				self._dsp_half_debt += chunk
+				if not self.dsp.in_reset:
+					spent = self._dsp_half_debt // M68K_PER_DSP
+					if spent > 0:
+						overshoot = self.dsp.run(spent)  # <= 0
+						self._dsp_half_debt = overshoot * M68K_PER_DSP
+
+				self._dac_debt += chunk
+				remaining -= chunk
+				if self._dac_debt >= M68K_PER_DAC:
+					self._dac_debt -= M68K_PER_DAC
+					sample = self._dsp_pop_outfifo()
+					self._on_audio_sample(sample)

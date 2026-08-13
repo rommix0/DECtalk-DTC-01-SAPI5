@@ -733,7 +733,7 @@ class TMS32010:
 			prev = self.opcode
 			prev_h = (prev >> 8) & 0xFF
 			# don't interrupt right after MPY, MPYK, or EINT (matches MAME)
-			if (self.STR & INTM_FLAG) == 0 and prev_h != 0x6D and (prev_h & 0xE0) != 0x80 and prev != 0x7F02:
+			if (self.STR & INTM_FLAG) == 0 and prev_h != 0x6D and (prev_h & 0xE0) != 0x80 and prev != 0x7F82:
 				cycles += self._service_interrupt()
 
 		pc = self.PC
@@ -782,7 +782,7 @@ class TMS32010:
 			if self.int_pending:
 				prev = self.opcode
 				prev_h = (prev >> 8) & 0xFF
-				if (self.STR & INTM_FLAG) == 0 and prev_h != 0x6D and (prev_h & 0xE0) != 0x80 and prev != 0x7F02:
+				if (self.STR & INTM_FLAG) == 0 and prev_h != 0x6D and (prev_h & 0xE0) != 0x80 and prev != 0x7F82:
 					step_cycles += self._service_interrupt()
 
 			pc = self.PC

@@ -315,7 +315,7 @@ int tms_step(tms32010_t *c)
         unsigned prev_h = (prev >> 8) & 0xFF;
         /* don't interrupt right after MPY, MPYK, or EINT (matches MAME) */
         if ((c->STR & INTM_FLAG) == 0 && prev_h != 0x6D &&
-            (prev_h & 0xE0) != 0x80 && prev != 0x7F02) {
+            (prev_h & 0xE0) != 0x80 && prev != 0x7F82) {
             cycles += service_interrupt(c);
         }
     }
