@@ -11,17 +11,21 @@ sample set.
 
 ## Status
 
-**0.5.59 is released** — download the `.nvda-addon` from
+**0.6.0 is released** — download the `.nvda-addon` from
 [Releases](https://github.com/borris84/dectalk-dtc01/releases/latest). The
 add-on checks for later releases itself and offers to install them.
 
-Working and in daily use. Speech, all eight built-in voices, rate, volume,
+Working and in daily use. Speech, all ten built-in voices, rate, volume,
 and the firmware's Design Voice parameters are functional, along with
 say-all, index reporting, and rate boost beyond the hardware's own ceiling.
 
+New in 0.6.0: the **v1.8 firmware** can be selected alongside v2.0, and
+**Doctor Dennis** and **Whispery Wendy** — two v2.0 voices that earlier
+releases missed — are now offered.
+
 | | |
 |---|---|
-| Latest release | 0.5.59 |
+| Latest release | 0.6.0 |
 | Emulation speed | ~19.7x realtime (native C core, PGO build) |
 | Startup | ~0.5s to first speech |
 | Latency | ~50ms typical from request to audio |
@@ -34,7 +38,8 @@ NVDA.
 ## Requirements
 
 * NVDA 2025.1 or later (64-bit or 32-bit -- both emulator cores ship in the package)
-* Your own DTC-01 v2.0 ROM dump (16 main-CPU chips + the `204`/`205` DSP pair)
+* Your own DTC-01 v2.0 ROM dump (16 main-CPU chips + the `204`/`205` DSP pair).
+  The v1.8 firmware is optional — see [Firmware version](#firmware-version).
 
 ## Providing the ROMs
 
@@ -53,6 +58,35 @@ The expected set is the v2.0 firmware (first half tagged 23 Jul 84, second
 half 02 Jul 84) with the `23-204f4` / `23-205f4` DSP pair. Exact SHA1s are
 listed in [DESIGN.md](DESIGN.md) §2.
 
+### Firmware version
+
+The DTC-01 shipped with two firmware revisions, and both can be run:
+
+| | v2.0 (default) | v1.8 |
+|---|---|---|
+| Dated | Jul 1984 | Oct/Dec 1983 |
+| Main CPU | `23-095`…`106`, `23-119`…`126` | `23-031`…`038`, `23-059`…`066` |
+| DSP pair | `23-204` / `23-205` | `23-165` / `23-166` |
+| Voices | 10 | 8 (no Doctor Dennis or Whispery Wendy) |
+
+Select it in the synthesizer settings under **Firmware version**. Only
+versions you actually have a complete ROM set for are offered, so nothing
+appears unless your dump holds both — one directory can hold both sets at
+once, since chips are matched by content hash.
+
+The two halves are not mixable: each main-CPU set requires its own DSP pair.
+Running v1.8 against v2.0's DSP clips badly, and v2.0 against v1.8's DSP
+comes out very quiet. The driver keeps them paired so the wrong combination
+cannot be selected.
+
+v1.8 is offered because it is the firmware the hardware originally shipped
+with, and it sounds noticeably different. v2.0 remains the default and is
+the better-tested path — most notably, the timing constants above the
+emulator were measured against it.
+
+Selecting v1.8 while using Doctor Dennis or Whispery Wendy switches you to
+Perfect Paul, since that firmware has no such voices.
+
 ## Settings
 
 Beyond the usual rate, volume and voice:
@@ -68,8 +102,22 @@ Beyond the usual rate, volume and voice:
   the finished audio, so it can clear the clipping that extreme head-size
   settings provoke — something a volume control cannot do.
 * **Variable Val** keeps whatever you set on it when you switch away and
-  back, matching the slot's purpose on real hardware. The seven fixed voices
+  back, matching the slot's purpose on real hardware. The fixed voices
   reset to their own defaults.
+* **Firmware version** — v2.0 or v1.8, see
+  [Firmware version](#firmware-version) above. Changing it restarts the
+  emulator, so speech stops for a moment.
+
+### Voices
+
+v2.0 provides all ten the firmware implements: Perfect Paul, Beautiful
+Betty, Huge Harry, Frail Frank, **Doctor Dennis**, Kit the Kid, Rough Rita,
+Uppity Ursula, **Whispery Wendy**, and Variable Val.
+
+Dennis and Wendy were absent before 0.6.0. The reference used for the voice
+table was the Owner's Manual, 2nd ed. May 1984 — which predates the v2.0
+firmware (July 1984) and documents the v1.8 set. Both voices were in the ROM
+all along; their factory parameters are read from the firmware itself.
 
 Line joining during say-all is automatic: wrapped lines are reassembled and
 split on real sentence boundaries, so a hard wrap mid-sentence doesn't
