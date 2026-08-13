@@ -12,7 +12,7 @@ DTC-01 Owner's Manual (OCR). Sources are cited inline.
 - `roms_extracted/` at the project root holds the user's own dumped ROM set
   for local development/testing only. Verified against MAME's known-good
   SHA1 hashes (see §2) — all 16 main-CPU v2.0 ROMs and the DSP `204/205`
-  pair matched exactly.
+  pair matched exactly, as did the full v1.8 set (§21).
 - The shipped addon ships zero ROM bytes. On first run it points the user
   at a config folder and validates checksums via `tools/rom_loader.py`
   logic before allowing the synth to start.
@@ -55,7 +55,9 @@ Local copy: `research/mame_dectalk.cpp`.
 
 ## 2. ROM layout (verified SHA1, v2.0 firmware — first-half tag 23Jul84,
    second-half tag 02Jul84 — plus the "clean" DSP `204/205` pair which the
-   driver's own comments say doesn't clip, unlike `165/166` or `409/410`)
+   driver's own comments say doesn't clip, unlike `165/166` or `409/410`
+   — but see §21: `165/166` does not clip with v2.0, it is just quieter,
+   and it is the pair v1.8 requires)
 
 Main CPU ROM region is `ROM_REGION16_BE(0x40000, "maincpu")`: 16 chips of
 0x4000 bytes each, **byte-interleaved** (`ROM_SKIP(1)`) into a linear
@@ -1292,8 +1294,227 @@ it 0.85s against 0.85s spoken alone -- no leak; `sayall_sim` back to 5.30s vs
   true. The accessor is kept because it is cheap and correct about what it
   reports, but it is not an end-of-utterance signal.
 
+## 21. Firmware v1.8 (2026-08-12) — MAME's other BIOS, implemented
+
+MAME's "switch" between firmware versions is not a runtime DIP switch: it is
+`ROM_SYSTEM_BIOS` (`mame dectalk -bios v18`), chosen when the machine is
+built. Selecting it swaps **both** the 16 main-CPU EPROMs and the DSP PROM
+pair. `emu/rom_loader.py` now mirrors that with a `RomSet` record per
+version, so the two halves cannot be selected independently.
+
+**No new ROM dumps were needed.** The user's `dectalk.zip` already contained
+every v1.8 chip, unused: main CPU `23-031…038` / `23-059…066`, DSP
+`23-165/166`. All 18 SHA-1s match MAME's `ROM_BIOS(1)` entries.
+
+### The DSP pairing is real, and now measured
+
+MAME's driver comments say the wrong DSP pair clips with v1.8. Confirmed
+here by speaking one sentence through all four combinations on our own core:
+
+| main CPU | DSP pair | peak | rms | clipped samples |
+|---|---|---|---|---|
+| v1.8 | 165/166 | 12544 | 474 | 0 |
+| **v1.8** | **204/205** | **32768** | **10390** | **61** |
+| v2.0 | 204/205 | 13536 | 1157 | 0 |
+| v2.0 | 165/166 | 9232 | 193 | 0 |
+
+The v1.8 + 204/205 row rails against the 16-bit limit — that is the
+"clips/screeches like hell" the MAME driver header describes. The last row
+reproduces its other note, that 165/166 works with v2.0 but comes out
+quieter (rms 193 vs 1157). Note this corrects §2's parenthetical, which
+lumped 165/166 in with 409/410 as "clipping": 165/166 does not clip with
+v2.0, it is merely quiet, and it is the *correct* pair for v1.8.
+
+### v1.8's audio was broken — what it was NOT (kept: the ruled-out list)
+
+**This section is the investigation record; the cause is in "RESOLVED" below.**
+
+
+Listening test, 2026-08-12: every v1.8 clip is broken. It is recognisably
+speech — fragments are intelligible, so the synthesis is not producing
+noise — but most of the waveform is missing. Measurements agree: **69% of
+the samples the v1.8 DSP writes are exactly `0x0000`**, against 20-30% for
+v2.0. The output is bursts of 10-60 real samples separated by ~90-sample
+(9 ms) runs of pure silence.
+
+This is worth reading before investigating further, because MAME's own TODO
+records the same symptom class as an upstream bug they already fixed:
+
+> `<DONE>` Figure out why the older -165/-166 and newer -409/-410 TMS32010
+> DSP firmwares don't produce any sound, while the middle -204/-205 one
+> does (**fifo implementations were busted**)
+
+So "the 165/166 DSP program is silent while 204/205 works" is a known way
+for a *host emulation* to be wrong, not evidence that the ROM pair is bad.
+Our port reproduces the shape of that bug. What has been ruled out:
+
+| hypothesis | how it was ruled out |
+|---|---|
+| DSP stalling / FIFO underrun | DSP writes 31935 samples per 40000 DAC ticks — near full rate, no stall. `outfifo_underruns` is 0. |
+| DAC holding a stale sample | gaps are exact `0x0000`; bursts end mid-swing (−1856), so a held value would be audible, not silent |
+| 68000 starving the DSP | v1.8 writes **more** to the infifo than v2.0 (9811 vs 5890 words per 2 s) |
+| wrong NVRAM image | blank NVRAM vs the v2.0 default moves the silent fraction 68.6% → 69.4%. Not the cause. |
+| CPU interleave granularity | the Python core interleaves one 68000 instruction at a time (MAME's exact historical schedule) and shows the same 69% |
+| missing/incorrect DSP opcodes | the five opcodes only v1.8 executes (`0x24/25/2a/2b/2e`, `LAC` with shift) are implemented, and `_getdata`'s sign-extend-then-shift matches `tms320c1x.cpp` exactly |
+| the DSP idling in a wait loop | during the silent runs it executes **955 distinct PCs** — the full synthesis loop. It is computing silence, not waiting for anything. |
+| a native-only bug | the pure-Python oracle and the C core agree to within a percentage point |
+| INT-line clear on outfifo write | our "inert no-op" is faithful: MAME's `execute_set_input` ignores `CLEAR_LINE` ("Pending Interrupts cannot be cleared!") |
+
+The infifo/outfifo/semaphore handlers were diffed against
+`mame_dectalk.cpp` line by line and match.
+
+### Differential trace against MAME (2026-08-13) — the 68000 half is exonerated
+
+MAME 0.289 was installed locally, which turns this from inference into
+measurement. `tools/mame_tap.lua` taps the same two buses inside MAME that
+we instrument in `machine.py`; run it as documented at the top of that file
+(**with an empty `-nvram_directory`** — a saved nvram changes the boot path
+and cost one confusing pair of runs before it was spotted).
+
+**MAME plays v1.8 correctly.** Duty cycle within the speech span, from
+`-wavwrite` captures: MAME v2.0 48.6%, MAME **v1.8 51.5%** — no degradation.
+Ours: v2.0 82.1%, v1.8 **8.9%**. (The absolute numbers differ between
+emulators because MAME resamples to 48 kHz; only the within-emulator
+comparison is meaningful.) So this is our defect, not a bad ROM pair and not
+an upstream limitation.
+
+**Our 68000 → DSP parameter stream is identical to MAME's**, word for word,
+on both firmware versions:
+
+```
+v20  ours  6000 0CE7 0104 0E45 014A 0CE4 0FD2 04B0 0000 0047 003C 0032
+v20  MAME  6000 0CE7 0104 0E45 014A 0CE4 0FD2 04B0 0000 0047 003C 0032
+v18  ours  6000 0CE7 00A0 0F3F 0082 0CE4 0FD2 04B0 0000 0047 003D 0032
+v18  MAME  6000 0CE7 00A0 0F3F 0082 0CE4 0FD2 04B0 0000 0047 003D 0032
+```
+
+That exonerates the entire 68000 half for both versions — firmware
+execution, memory map, DUART, NVRAM, interrupts, and the letter-to-sound and
+prosody code that generates these words. **The defect is inside the DSP
+subsystem.**
+
+**Where the DSP diverges.** MAME's DSP writes *exactly* 10000 samples/s
+while speaking — one per DAC tick, paced by the outfifo INT:
+
+| | write rate while speaking | exact-zero writes | first nonzero write |
+|---|---|---|---|
+| MAME v2.0 | 10000/s | — | t=0.5181s |
+| MAME v1.8 | **10000/s** | **3.2%** | t=0.7340s |
+| ours v2.0 | 9993/s | 20–30% | t=0.6755s |
+| ours v1.8 | **8898/s** | **69%** | t=0.4949s |
+
+Our v2.0 hits the pacing (9993 ≈ 10000) which is why it sounds right. Our
+v1.8 runs 11% short *and* fills 69% of its writes with silence, where MAME
+fills 3.2%. Counting only real waveform samples over 12 s: MAME ~34600,
+ours ~15900 — MAME produces **2.2× more actual audio**. Our v1.8 also starts
+speaking 0.24 s *early* off an identical input stream.
+
+**Verified faithful, so not the cause** (in addition to the table above):
+the DSP opcode cycle table is a **0-mismatch** diff against MAME's
+`s_opcode_main[256]`; `add_branch_cycle()` returns the instruction's base
+cycles (what we do); the interrupt costs 3 cycles (what we do); `BIOZ`
+polarity matches; `execute_set_input` ignoring `CLEAR_LINE` matches.
+
+### RESOLVED (2026-08-13) — the DAC tick was delivered late
+
+**The scheduler let the DSP run past the DAC tick before the tick was
+delivered.** The tick is what asserts the DSP's outfifo interrupt, and v1.8's
+DSP program cannot tolerate a late one.
+
+Found by bus bisection rather than the planned instruction lockstep — the
+taps in `tools/mame_tap.lua` narrowed it in four steps:
+
+1. `dspread` — the words our DSP pulls out of the infifo diverge from MAME's
+   at read 44 (v2.0: identical for all 16307 reads, which validated the
+   harness).
+2. `in` — the **68000's own write stream** diverges at word 62. This
+   overturned the previous session's "68000 exonerated" claim, which had
+   compared only the first 12 words. Ours re-sends frame 1 (`6000 0CE7…`)
+   where MAME sends a new frame (`4000 015C…`).
+3. `spcflags` — ours reads `0x00E0` 104 times; MAME never does. Bit 5 is the
+   **DSP soft-error latch**. The firmware's error path is what re-sends
+   frames.
+4. `dsp0` — MAME's v1.8 DSP raises that error bit **once**; ours **104
+   times**, all from DSP PC `0x68E`.
+
+`0x68E` sits at the end of a timeout loop. The DSP arms a counter of 20,
+then spins `EINT / LAC 7D / DINT / BZ` — a one-instruction interrupt window
+per iteration. The ISR (vector `002: br 694`) writes the sample, zeroes
+`mem[7D]`, and critically executes `ZAC`, so **ACC=0 on return is the signal
+that the tick arrived** and the `BZ` at `0x67F` is the normal exit. Twenty
+missed windows falls through to `OUT mem[10]` → error bit.
+
+The margin is thin: the DSP reaches that loop ~354 cycles into a 500-cycle
+sample period, leaving ~146 cycles of slack. Our loop ran the DSP for a
+whole 68000 instruction *before* processing the DAC tick, so the interrupt
+could land late enough to blow the window. In the native core, capping
+`budget` at the tick boundary was not enough — `m68k_execute()` finishes the
+instruction in progress, so `cycles` overshoots anyway.
+
+**Fix:** hand the executed cycles to the DSP in chunks that stop at each DAC
+boundary (`emu/machine.py` `run_seconds`, `native/dtc01.c` `dtc01_run_samples`).
+This is our cycle arithmetic expressing what MAME gets from
+`config.m_perfect_cpu_quantum = subtag("dsp")`.
+
+| v1.8 | before | after | MAME |
+|---|---|---|---|
+| soft errors (2 s) | 104 | **0** | 1 |
+| DSP writes while speaking | 8898/s | **10000/s** | 10000/s |
+| exact-zero samples | 69% | **4.9%** | 3.2% |
+| nonzero audio samples | 9% | **98%** | — |
+
+**v2.0 is bit-identical either way** — its DSP uses a laxer wait — so this
+carries no regression risk for the shipping path; realtime factor 15.6x vs
+15.9x before, inside noise.
+
+Also fixed alongside: the EINT guard constant in both TMS32010 cores was
+`0x7F02`; the real `EINT` encoding is **`0x7F82`** (MAME:
+`m_opcode.w.l != 0x7f82`), so "don't service an interrupt right after EINT"
+never fired. It made no difference to this bug — the interrupt is serviced
+one instruction later either way, before the `DINT` — but it was wrong.
+
+**Note for future MAME work:** `-debugger none` initialises the debugger but
+never pumps its command queue, so `-debugscript` silently does nothing —
+`trace` is not available headless. And reading `cpu.state[...]` from inside a
+Lua memory tap segfaults MAME. The tap-based approach in `tools/mame_tap.lua`
+is the one that works.
+
+### The NVRAM worry did not materialise
+
+MAME's ROM_START carries `// NOTE: this nvram image is ONLY VALID for v2.0;
+v1.8 expects a different image`, and our `DEFAULT_NVRAM_*` tables in
+`native/dtc01.c` were decoded from v2.0's own embedded copy at `0x1A7AE`.
+That copy is **not** at `0x1A7AE` in the v1.8 image, and a scan of the v1.8
+image for a structurally similar sparse 0x80-byte nibble block found no
+candidate — so the expectation was an `NVR FAULT` dead-end.
+
+It did not happen. With the v2.0 default image, v1.8 reaches the same LED
+state (`0xda`), emits the same `>` host prompt, and drives the synthesiser.
+Booting it with a **blank** NVRAM instead changes the silent-sample
+fraction from 68.6% to 69.4% — so the foreign NVRAM image is not what
+breaks v1.8's audio either. Finding v1.8's own copy remains open as a
+correctness question, but it is not the bug.
+
+### Gate
+
+`$DTC01_ROM_VERSION` (`v20` default; accepts `v18`, `1.8`, `18`, …).
+Resolved inside `rom_loader`, so every tool — `build_rom_images.py`,
+`disasm68k.py`, `smoke_test_dsp.py` — picks it up with no code change; that
+is what makes the v1.8 image disassemblable for the NVRAM hunt above.
+Deliberately not a settings-panel entry: everything above the emulator was
+calibrated against v2.0 — the NVRAM defaults, `BOOT_ANNOUNCE_WAIT_BLOCKS`,
+and `FIRMWARE_LINE_BYTES` (§19's ~134-byte input cliff). Those need
+re-measuring on v1.8 before it is a choice a user should be offered.
+`findRomDir()` validates only the selected version, so a dump holding just
+one firmware is still a valid dump.
+
 ## 8. Open follow-ups (not yet resolved — do not assume)
 
+- **v1.8's factory NVRAM image** — location unknown (§21). Not at `0x1A7AE`
+  as in v2.0. Needs the same treatment v2.0 got: disassemble the v1.8
+  NVRAM-recall routine and follow it to its table.
+- **v1.8 timing constants** — the §19 input-line limit and the boot
+  announcement window are v2.0 measurements, unverified on v1.8.
 - ~~Built-in voice table~~ **RESOLVED 2026-07-28**: see section 6b above.
 - ~~DSP ROM byte-interleave order~~ **RESOLVED 2026-07-28**: assembled
   image's first two words are `F900 00E1`, which is exactly TMS32010's
