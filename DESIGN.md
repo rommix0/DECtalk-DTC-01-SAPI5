@@ -234,9 +234,38 @@ anything the DTC-01 sends back:
    natural clause-boundary pausing) in exchange for guaranteed-correct
    index positions instead of timing-estimated ones.
 
-## 6b. Built-in voice table (Table 5-2, verified from the manual)
+## 6b. Built-in voice table
 
-Seven built-in voices plus one user-definable slot, selected with `[:n_]`:
+**CORRECTED 2026-08-13.** The table below came from the Owner's Manual
+`EK-DTC01-OM-002`, **2nd ed. May 1984** — which predates the v2.0 firmware
+(ROM halves tagged 02Jul84 and 23Jul84). It is the *v1.8* voice set. v2.0
+has **ten** voices: it adds **Doctor Dennis** (`[:nd]`) and **Whispery
+Wendy** (`[:nw]`). Note the ROM's spelling — "Whispery", not the
+"Whispering" some secondary sources give.
+
+Evidence, since a manual predating the firmware is exactly how this was
+missed the first time:
+
+- v2.0's ROM holds all ten names as a contiguous table at main-CPU
+  `0x179AA`: `Perfect Paul\0Beautiful Betty\0…Doctor Dennis\0…Whispery
+  Wendy\0Variable Val\0`. **The v1.8 image contains none of them.**
+- Functionally, on v2.0 `[:nd]` and `[:nw]` produce clearly distinct audio
+  (Dennis peak 27616 / rms 2052; Wendy peak 9776 / rms 804 / zcr 0.338 — the
+  low amplitude and high zero-crossing rate of a breathy whisper, against
+  Paul's 13536 / 1157 / 0.188). On v1.8 both are indistinguishable from
+  Paul, while `[:nb]` stays distinct — so v1.8 has voices, just not these
+  two, and an unrecognised `[:n_]` leaves the current voice in place.
+- Their Design Voice defaults were queried from the ROM by
+  `tools/dump_voice_defaults.py` (`[:dv listall]`), not transcribed: Dennis
+  `ap=100 br=62 sm=100 g5=74`, Wendy `ap=264 br=58 ri=0 sm=100 g5=80`.
+
+Consequences in the driver: `commands.voices_for(firmware)` filters the
+table, `availableVoices` follows the selected firmware, and switching to
+v1.8 while on Dennis or Wendy falls back to Paul with a logged warning —
+otherwise the panel would name a voice the ROM silently ignores.
+
+Original (v1.8) set — seven built-in voices plus one user-definable slot,
+selected with `[:n_]`:
 
 | Command | Name | Characteristics |
 |---|---|---|
@@ -1507,6 +1536,71 @@ and `FIRMWARE_LINE_BYTES` (§19's ~134-byte input cliff). Those need
 re-measuring on v1.8 before it is a choice a user should be offered.
 `findRomDir()` validates only the selected version, so a dump holding just
 one firmware is still a valid dump.
+
+## 22. "It stopped after 0.5." (2026-08-13) — a bad split and a stuck DAC
+
+Reported from real use on v1.8: NVDA's add-on dialog was spoken as
+*"Add-on Installation dialog You are about to install version 0.5."* and
+then nothing. **Two independent bugs**, and only their combination is
+audible as a truncation.
+
+### Bug 1 — the line splitter cut inside the number
+
+`_splitForFirmware` picked the rightmost `.` in its window, and in
+`version 0.5.59` that is the period between `5` and `59`. The first piece
+came out as `...install version 0.5.` — byte-for-byte what the user heard.
+Firmware-independent: v2.0 mangles it too (`"zero point five"` /
+`"fifty-nine of..."`), it just does not stall afterwards, so it reads as
+awkward rather than broken. Same trap for `1,234`, `U.S.A.`, `3.14`.
+
+**Fix:** a mark only ends a piece when whitespace (or end of text) follows.
+
+### Bug 2 — a held DAC sample read as speech forever
+
+The real failure. With that piece, v1.8's pump ran to its 12000-block
+ceiling: **298.93s of audio for a 66-byte line** (v2.0: 4.53s). The probe:
+
+```
+v18 pump#1: status=exhausted emitted=11957 speech=11954 idle(T/F)=11849/151
+```
+
+Speech on 11954 of 11957 blocks *while reporting idle*. Sampling the output
+shows what it actually was:
+
+```
+peak=128  distinct values=1   idle=True     (still true at 40s)
+```
+
+A **constant DC level of 128**. `dsp_pop_outfifo` holds the last sample when
+the fifo drains — correct hardware behaviour — and v1.8 parked on 128, which
+is just over `SILENCE_THRESHOLD` (120). So `isSpeech` was true forever,
+`quiet` never accumulated, and the loop only ended at `maxBlocks`. Had the
+held value been 119 nothing would have happened. v2.0 parks at 0.
+
+The trigger is narrow and **rate-dependent**, which is why the first
+isolation attempts missed it:
+
+| payload | outcome |
+|---|---|
+| `…version 0.5.` at `[:ra 235]` (the driver's rate at speed 50) | never goes quiet |
+| `…version 0.5.` at `[:ra 350]` | normal, 4.7s |
+| same text, trailing dot removed, `[:ra 235]` | normal, 1.9s |
+| `The version is 0.5.` / `Pi is 3.14.` at `[:ra 235]` | normal — short text does not reach it |
+
+**Fix:** a block whose samples are all one value is not speech, whatever its
+level (`NativeMachine.is_flat`, applied at both detection sites in `_pump`).
+A constant level carries no audio and is inaudible through a speaker; only a
+peak detector was fooled. With the guard, the same forced-bad-split payload
+ends in 271 blocks (6.8s) instead of 12000 (300s).
+
+Both fixes are kept: Bug 1 removes the trigger, Bug 2 removes the failure
+mode. Either alone would have hidden this particular report.
+
+**Why it surfaced now:** nothing here is new — the held-sample behaviour and
+the splitter predate v1.8 support. Making v1.8 selectable in the settings
+panel is what made it reachable, and it is the same lesson as §21: the
+constants above the emulator (`SILENCE_THRESHOLD`, `FIRMWARE_LINE_BYTES`,
+the boot windows) are all v2.0 measurements.
 
 ## 8. Open follow-ups (not yet resolved — do not assume)
 

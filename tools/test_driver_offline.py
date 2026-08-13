@@ -157,8 +157,21 @@ def install_stubs():
     ds.NumericDriverSetting = _Setting
     ds.BooleanDriverSetting = _Setting
     asu.driverSetting = ds
+    # StringParameterInfo lives in autoSettingsUtils.utils, a *different*
+    # module from the settings classes. Leaving it unstubbed made the guarded
+    # import fall through to None, which silently dropped the firmware
+    # selector from supportedSettings -- the test passed while testing less
+    # than it appeared to.
+    utils = types.ModuleType("autoSettingsUtils.utils")
+
+    class _StringParameterInfo:
+        def __init__(self, id, displayName):
+            self.id, self.displayName = id, displayName
+    utils.StringParameterInfo = _StringParameterInfo
+    asu.utils = utils
     sys.modules["autoSettingsUtils"] = asu
     sys.modules["autoSettingsUtils.driverSetting"] = ds
+    sys.modules["autoSettingsUtils.utils"] = utils
     sys.modules["driverHandler"] = types.ModuleType("driverHandler")
 
     gv = types.ModuleType("globalVars")
@@ -287,6 +300,83 @@ def main() -> int:
         print("  ** FAIL: no audio after cancel/recovery"); ok = False
     if len(doneNotifier.events) != 1:
         print("  ** FAIL: expected doneSpeaking after recovery"); ok = False
+
+    # ---- firmware selector ---------------------------------------------
+    # Switching firmware rebuilds every emulator instance, so this checks the
+    # synth still speaks afterwards rather than just that the value changed.
+    # Only meaningful when the ROM dir holds both sets; skipped otherwise.
+    from synthDrivers.dectalkDtc01 import installedFirmwares
+    installed = installedFirmwares()
+    print(f"\nfirmware selector: installed = {installed}")
+    if not hasattr(synth, "_get_availableFirmwares"):
+        print("  (skipped: DriverSetting API unavailable)")
+    elif len(installed) < 2:
+        print("  (skipped: only one firmware set present in the ROM dir)")
+    else:
+        choices = synth._get_availableFirmwares()
+        print(f"  choices: {[(k, v.displayName) for k, v in choices.items()]}")
+        if list(choices) != installed:
+            print("  ** FAIL: choices do not match installed firmwares"); ok = False
+        # _get_/_set_ directly: the stub base class has no AutoPropertyObject
+        # metaclass, so the bare `synth.firmware` property NVDA generates
+        # does not exist here. Same convention as the settings block above.
+        start = synth._get_firmware()
+        other = next(v for v in installed if v != start)
+        print(f"  switching {start} -> {other}")
+        synth._set_firmware(other)
+        if synth._get_firmware() != other:
+            print("  ** FAIL: firmware did not change"); ok = False
+        synth._machineReady.wait(timeout=60)
+        if synth._machine is None:
+            print("  ** FAIL: no emulator after firmware switch"); ok = False
+        else:
+            synth._player = _FakePlayer()
+            indexNotifier.events.clear(); doneNotifier.events.clear()
+            synth.speak(["Firmware switched."])
+            synth._jobs.join()
+            n = len(bytes(synth._player.data)) // 2
+            print(f"  audio on {other}: {n} samples ({n/10000:.2f}s)")
+            if n < 5000:
+                print("  ** FAIL: no audio after firmware switch"); ok = False
+        # Doctor Dennis and Whispery Wendy are v2.0-only. The voice list must
+        # follow the firmware, and a v2.0-only voice must not survive a switch
+        # to v1.8 -- otherwise [:nd] goes to a ROM that ignores it and the user
+        # hears Paul while the panel says Dennis.
+        voicesNow = list(synth._get_availableVoices())
+        print(f"  voices on {synth._get_firmware()}: {len(voicesNow)}")
+        if synth._get_firmware() == "v18":
+            if "dennis" in voicesNow or "wendy" in voicesNow:
+                print("  ** FAIL: v2.0-only voice offered on v1.8"); ok = False
+            synth._set_voice("dennis")
+            if synth._get_voice() == "dennis":
+                print("  ** FAIL: v2.0-only voice accepted on v1.8"); ok = False
+            else:
+                print("  v2.0-only voice correctly refused on v1.8")
+        else:
+            for v in ("dennis", "wendy"):
+                if v not in voicesNow:
+                    print(f"  ** FAIL: {v} missing from v2.0 voice list"); ok = False
+            synth._set_voice("dennis")
+            if synth._get_voice() != "dennis":
+                print("  ** FAIL: could not select Doctor Dennis on v2.0"); ok = False
+            else:
+                print("  Doctor Dennis selectable on v2.0")
+            # ...and switching away from it must not leave it selected.
+            synth._set_firmware(start)
+            synth._machineReady.wait(timeout=60)
+            if synth._get_voice() == "dennis" and start == "v18":
+                print("  ** FAIL: Dennis survived the switch to v1.8"); ok = False
+
+        # An unknown value must be refused, not applied -- NVDA restores
+        # saved settings blindly, so a stale config must not strand the synth.
+        # Compare against whatever is selected *now*: the voice checks above
+        # may legitimately have switched firmware again.
+        before = synth._get_firmware()
+        synth._set_firmware("v99")
+        if synth._get_firmware() != before:
+            print("  ** FAIL: unknown firmware was accepted"); ok = False
+        else:
+            print("  unknown firmware correctly refused")
 
     synth.terminate()
     print("\nRESULT:", "PASS" if ok else "FAIL")

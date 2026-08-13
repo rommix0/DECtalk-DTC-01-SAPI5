@@ -44,6 +44,19 @@ except ImportError:
 	except ImportError:
 		NumericDriverSetting = BooleanDriverSetting = None
 
+# Same guarded-import treatment for the plain string setting used by the
+# firmware selector. DriverSetting + StringParameterInfo moved together, so
+# they are imported together; if either is missing the selector is dropped
+# and the driver runs on whichever firmware romVersion() resolves.
+try:
+	from autoSettingsUtils.driverSetting import DriverSetting
+	from autoSettingsUtils.utils import StringParameterInfo
+except ImportError:
+	try:
+		from driverHandler import DriverSetting, StringParameterInfo
+	except ImportError:
+		DriverSetting = StringParameterInfo = None
+
 # Say all is detected rather than configured: joining lines across
 # newlines only makes sense while a whole document is being read. Outside
 # say all there is no "next line" to flush a held fragment, so navigation
@@ -168,8 +181,17 @@ STATS_LOG_SECONDS = 30.0
 BOOT_ANNOUNCE_WAIT_BLOCKS = 240  # 6s to start speaking before we give up
 BOOT_MAX_BLOCKS = 1000           # 25s hard ceiling on the whole announcement
 
-_romDirCache = None
+# Keyed by firmware version, because the two versions genuinely resolve to
+# different directories: a user whose config dir holds only a v2.0 dump gets
+# v2.0 from there and v1.8 from the add-on's bundled copy. A single cached
+# path would hand one version the other's directory.
+_romDirCache = {}
 _romVersionCache = None
+
+# Worker-queue sentinel: rebuild every emulator on the selected firmware.
+# A distinct object rather than a string so it can never collide with a real
+# job tuple, and so `is` comparisons are unambiguous (cancel() has to spot it).
+_REBOOT = object()
 
 
 def romVersion():
@@ -250,16 +272,16 @@ def _snip(text, limit=60):
 	return text if len(text) <= limit else text[:limit] + "..."
 
 
-def findRomDir(refresh=False):
+def findRomDir(refresh=False, version=None):
 	"""First directory holding a complete, checksum-valid ROM set, or None.
 
 	"Complete" means for the *selected* firmware version only -- a dump of
 	just one version is a valid dump, so requiring both would reject it.
 	"""
-	global _romDirCache
-	if _romDirCache is not None and not refresh:
-		return _romDirCache or None
-	version = romVersion()
+	if version is None:
+		version = romVersion()
+	if not refresh and version in _romDirCache:
+		return _romDirCache[version] or None
 	for path in _candidateRomDirs():
 		if not path or not os.path.isdir(path):
 			continue
@@ -270,10 +292,22 @@ def findRomDir(refresh=False):
 		except Exception:
 			log.debugWarning(f"DTC-01: error validating ROMs in {path}", exc_info=True)
 			continue
-		_romDirCache = path
+		_romDirCache[version] = path
 		return path
-	_romDirCache = ""
+	_romDirCache[version] = ""
 	return None
+
+
+def installedFirmwares():
+	"""Firmware versions the user actually has a valid ROM set for.
+
+	Drives the settings-panel choices: offering a firmware whose chips are
+	missing would just break the synth on selection. Ordered with the default
+	first so the combo opens on the safe choice.
+	"""
+	found = [v for v in rom_loader.ROM_SETS if findRomDir(version=v) is not None]
+	found.sort(key=lambda v: (v != rom_loader.DEFAULT_VERSION, v))
+	return found
 
 
 def _makePlayer():
@@ -339,7 +373,29 @@ FIRMWARE_LINE_BYTES = 120
 # costs nothing -- the piece still ends in real sentence punctuation. Clause
 # marks are next. A space is the last resort before a hard cut, and only a
 # single unbroken run longer than the limit reaches that.
-_SPLIT_PREFERENCE = (".!?", ",;:", " ")
+#
+# The flag is "this mark only counts when whitespace (or nothing) follows".
+# Without it the search finds the last '.' anywhere in the window, which
+# inside "version 0.5.59" is the one between "5" and "59" -- so the line was
+# cut mid-number and spoken as "zero point five" / "fifty-nine of ...".
+# Commas need the same guard for the same reason ("1,234").
+_SPLIT_PREFERENCE = ((".!?", True), (",;:", True), (" ", False))
+
+
+def _lastBreakIndex(rest, window, chars, needsSpaceAfter):
+	"""Index of the rightmost usable break in `window`, or -1.
+
+	`rest` is the full remaining text: whether a mark ends a token depends on
+	the character *after* it, which for a mark at the window's edge lives
+	beyond the window.
+	"""
+	for i in range(len(window) - 1, -1, -1):
+		if window[i] not in chars:
+			continue
+		if needsSpaceAfter and i + 1 < len(rest) and not rest[i + 1].isspace():
+			continue   # mid-token: a decimal point, "U.S.A.", "1,234"
+		return i
+	return -1
 
 
 def _splitForFirmware(text, budget, firstOverhead=0):
@@ -364,8 +420,8 @@ def _splitForFirmware(text, budget, firstOverhead=0):
 			break
 		window = rest[:limit]
 		cut = -1
-		for chars in _SPLIT_PREFERENCE:
-			cut = max(window.rfind(c) for c in chars)
+		for chars, needsSpaceAfter in _SPLIT_PREFERENCE:
+			cut = _lastBreakIndex(rest, window, chars, needsSpaceAfter)
 			if cut > 0:
 				break
 		if cut <= 0:
@@ -414,6 +470,18 @@ class SynthDriver(SynthDriver):
 			# against the rail; this brings that to zero.
 			NumericDriverSetting("loudness", _("Formant &gain"), minStep=5),
 		) if NumericDriverSetting is not None else ()
+	) + (
+		# Which ROM firmware to emulate. Listed last because it is a
+		# rarely-touched hardware choice, not a voice control, and because
+		# changing it reboots the emulator (see _set_firmware).
+		#
+		# The setting id is deliberately one lowercase word: NVDA builds the
+		# choices-property name as "available" + id.capitalize() + "s", and
+		# capitalize() lowercases the rest, so an id like "romVersion" would
+		# have to be served by "availableRomversions". "firmware" ->
+		# "availableFirmwares" has no such trap.
+		(DriverSetting("firmware", _("&Firmware version")),)
+		if DriverSetting is not None and StringParameterInfo is not None else ()
 	)
 	supportedCommands = {IndexCommand}
 	supportedNotifications = {synthIndexReached, synthDoneSpeaking}
@@ -444,6 +512,16 @@ class SynthDriver(SynthDriver):
 		self._smoothness = 50
 		self._loudness = 50
 		self._valParams = None   # remembered sliders for Variable Val
+		# $DTC01_ROM_VERSION supplies the initial choice; the settings panel
+		# overrides it from here on. If that choice has no valid ROM set --
+		# a stale env var, or a saved config whose dump was since removed --
+		# fall back to something installed rather than booting nothing.
+		installed = installedFirmwares()
+		self._firmware = romVersion()
+		if installed and self._firmware not in installed:
+			log.warning(f"DTC-01: no ROM set for {self._firmware}; "
+						f"falling back to {installed[0]}")
+			self._firmware = installed[0]
 		# Text held back waiting for a sentence boundary (smooth mode).
 		self._pendingText = ""
 		self._pendingSince = 0.0
@@ -527,24 +605,101 @@ class SynthDriver(SynthDriver):
 		super().terminate()
 
 	# -- settings -----------------------------------------------------------
+	# Names as the ROM spells them (main-CPU 0x179AA) -- "Whispery Wendy",
+	# not the "Whispering Wendy" some secondary sources give.
+	_VOICE_LABELS = {
+		"paul": _("Perfect Paul"),
+		"betty": _("Beautiful Betty"),
+		"harry": _("Huge Harry"),
+		"frank": _("Frail Frank"),
+		"dennis": _("Doctor Dennis"),
+		"kit": _("Kit the Kid"),
+		"rita": _("Rough Rita"),
+		"ursula": _("Uppity Ursula"),
+		"wendy": _("Whispery Wendy"),
+		"val": _("Variable Val"),
+	}
+
 	def _get_availableVoices(self):
-		labels = {
-			"paul": _("Perfect Paul"),
-			"betty": _("Beautiful Betty"),
-			"harry": _("Huge Harry"),
-			"frank": _("Frail Frank"),
-			"kit": _("Kit the Kid"),
-			"rita": _("Rough Rita"),
-			"ursula": _("Uppity Ursula"),
-			"val": _("Variable Val"),
-		}
+		# Follows the selected firmware: v1.8 has no Dennis or Wendy, and
+		# offering them there would just play Paul while the panel claimed
+		# otherwise (DESIGN.md §6b).
 		return OrderedDict(
-			(key, VoiceInfo(key, labels.get(key, key), language="en"))
-			for key in dtcmd.VOICES
+			(key, VoiceInfo(key, self._VOICE_LABELS.get(key, key), language="en"))
+			for key in dtcmd.voices_for(self._firmware)
 		)
 
 	def _get_voice(self):
 		return self._voice
+
+	# -- firmware selection --------------------------------------------------
+	def _get_availableFirmwares(self):
+		return OrderedDict(
+			(v, StringParameterInfo(v, rom_loader.ROM_SETS[v].description))
+			for v in installedFirmwares()
+		)
+
+	def _get_firmware(self):
+		return self._firmware
+
+	def _set_firmware(self, value):
+		if value == self._firmware:
+			return
+		if value not in rom_loader.ROM_SETS:
+			log.warning(f"DTC-01: ignoring unknown firmware {value!r}")
+			return
+		if findRomDir(version=value) is None:
+			log.warning(f"DTC-01: no valid ROM set for "
+						f"{rom_loader.ROM_SETS[value].description}; keeping "
+						f"{rom_loader.ROM_SETS[self._firmware].description}")
+			return
+		self._firmware = value
+		# Dennis and Wendy exist only in v2.0. Staying on one after a switch to
+		# v1.8 would send [:nd]/[:nw], which that ROM ignores -- the user would
+		# hear Paul while the panel still said Doctor Dennis. Fall back
+		# explicitly instead, and say so.
+		if self._voice not in dtcmd.voices_for(value):
+			log.warning(f"DTC-01: {self._VOICE_LABELS.get(self._voice, self._voice)} "
+						f"is not in {rom_loader.ROM_SETS[value].description}; "
+						f"switching to {self._VOICE_LABELS['paul']}")
+			self._set_voice("paul")
+		# The ROM image is baked in when a machine is created, so this cannot
+		# be applied to the running emulators -- they have to be rebuilt. Stop
+		# whatever is speaking first (cancel bumps the generation, so queued
+		# work is discarded rather than half-spoken in the old firmware), then
+		# hand the rebuild to the worker: the vendored Musashi core keeps 68000
+		# state in process globals, so machines are only ever created and
+		# destroyed on that one thread.
+		self.cancel()
+		self._machineReady.clear()
+		self._jobs.put(_REBOOT)
+
+	def _rebootMachines(self):
+		"""Tear down every emulator instance and boot the selected firmware.
+
+		Worker-thread only. Runs even if the old machines fail to close, so a
+		misbehaving instance cannot strand the synth with no machines at all.
+		"""
+		old, self._machines = self._machines, []
+		for machine in old:
+			try:
+				machine.close()
+			except Exception:
+				log.debugWarning("DTC-01: closing an emulator failed", exc_info=True)
+		# Every per-instance cache is keyed by list position, so all of it is
+		# meaningless once the instances are replaced.
+		self._dirty = []
+		self._cleanState = {}
+		self._lastPrefix = {}
+		self._activeIdx = 0
+		try:
+			self._bootMachines()
+		except Exception:
+			log.error("DTC-01: emulator restart failed", exc_info=True)
+		finally:
+			# Set unconditionally: a waiter blocking on this must be released
+			# even when the reboot produced no machines, or speak() hangs.
+			self._machineReady.set()
 
 	# The parameter sliders, in the order they are saved/restored.
 	_PARAM_ATTRS = ("_pitch", "_inflection", "_headSize",
@@ -558,7 +713,10 @@ class SynthDriver(SynthDriver):
 			setattr(self, attr, value)
 
 	def _set_voice(self, value):
-		if value not in dtcmd.VOICES or value == self._voice:
+		# Validated against the *current firmware's* table: NVDA restores a
+		# saved voice blindly, so a config written under v2.0 can name Dennis
+		# while v1.8 is loaded.
+		if value not in dtcmd.voices_for(self._firmware) or value == self._voice:
 			return
 		if self._voice == VARIABLE_VOICE:
 			# Variable Val is the hardware's user-definable slot -- the one
@@ -781,10 +939,16 @@ class SynthDriver(SynthDriver):
 				discarded.append(job)
 			except queue.Empty:
 				break
-		# terminate() puts a None sentinel on this same queue, so a cancel
-		# racing shutdown can pull it out. Keep it out of the count and, more
-		# importantly, out of the unpacking below.
-		discarded = [j for j in discarded if j is not None]
+		# terminate() puts a None sentinel on this same queue, and
+		# _set_firmware puts a _REBOOT one, so a cancel racing either can pull
+		# it out. Keep both out of the count and, more importantly, out of the
+		# unpacking below. _REBOOT additionally has to go *back*: dropping it
+		# would leave the user having picked a firmware that never loads.
+		sentinels = [j for j in discarded if j is None or j is _REBOOT]
+		discarded = [j for j in discarded if j is not None and j is not _REBOOT]
+		for sentinel in sentinels:
+			if sentinel is _REBOOT:
+				self._jobs.put(sentinel)
 		if discarded:
 			with self._stateLock:
 				self._stats["discarded"] += len(discarded)
@@ -823,11 +987,14 @@ class SynthDriver(SynthDriver):
 			return not self._stopping.is_set() and generation == self._generation
 
 	def _bootMachines(self, count=EMULATOR_INSTANCES):
-		romDir = findRomDir()
+		version = self._firmware
+		romDir = findRomDir(version=version)
 		if romDir is None:
-			log.error("DTC-01: no valid ROM set found; synth cannot start")
+			# Name the version: with two firmwares selectable, "no valid ROM
+			# set" alone leaves the user guessing which chips are missing.
+			log.error(f"DTC-01: no valid ROM set found for "
+					  f"{rom_loader.ROM_SETS[version].description}; synth cannot start")
 			return
-		version = romVersion()
 		for _ in range(count):
 			try:
 				machine = NativeMachine(romDir, rom_version=version)
@@ -927,7 +1094,8 @@ class SynthDriver(SynthDriver):
 				block = machine.run_block(BLOCK_SAMPLES)
 				if not block:
 					break
-				if machine.peak_of(block) >= SILENCE_THRESHOLD:
+				if (machine.peak_of(block) >= SILENCE_THRESHOLD
+						and not machine.is_flat(block)):
 					state["heard"] = True
 					state["quiet"] = 0
 					continue
@@ -1004,7 +1172,12 @@ class SynthDriver(SynthDriver):
 			if not block:
 				return "done"
 
-			isSpeech = machine.peak_of(block) >= SILENCE_THRESHOLD
+			# A block of one repeated value is the DAC holding its last sample,
+			# not speech -- see NativeMachine.is_flat. Without this a held
+			# value above the threshold means quiet never accumulates and the
+			# loop only ends at maxBlocks, five minutes later (DESIGN.md §22).
+			isSpeech = (machine.peak_of(block) >= SILENCE_THRESHOLD
+						and not machine.is_flat(block))
 
 			if not trimSilence:
 				emit(block)
@@ -1100,6 +1273,9 @@ class SynthDriver(SynthDriver):
 			try:
 				if job is None:
 					return
+				if job is _REBOOT:
+					self._rebootMachines()
+					continue
 				if self._machine is None:
 					continue
 				generation, events, uttId = job

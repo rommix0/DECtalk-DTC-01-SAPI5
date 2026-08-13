@@ -46,8 +46,11 @@ def settle(m):
             return
 
 
-def query(voiceKey):
-    m = NativeMachine(str(ROOT / "roms_extracted"))
+def query(voiceKey, firmware="v20"):
+    # Pinned to v2.0, not left to $DTC01_ROM_VERSION: v1.8 has no Dennis or
+    # Wendy and silently keeps the current voice for an unknown [:n_] code, so
+    # querying it would emit Paul's numbers under their names.
+    m = NativeMachine(str(ROOT / "roms_extracted"), rom_version=firmware)
     settle(m)
     m.read_host_tx()
     m.feed_text(f"{dtcmd.voice_command(voiceKey)}[:dv listall]\r".encode("ascii"))

@@ -19,11 +19,30 @@ VOICES = {
 	"betty": "nb",  # Beautiful Betty -- standard female
 	"harry": "nh",  # Huge Harry -- deep male
 	"frank": "nf",  # Frail Frank -- older male
+	"dennis": "nd",  # Doctor Dennis -- v2.0 only (see V20_ONLY_VOICES)
 	"kit": "nk",  # Kit the Kid -- child's voice (10yo)
 	"rita": "nr",  # Rough Rita -- deep female
 	"ursula": "nu",  # Uppity Ursula -- light female
+	"wendy": "nw",  # Whispery Wendy -- v2.0 only (see V20_ONLY_VOICES)
 	"val": "nv",  # Variable Val -- user-definable (last [:dv ... save])
 }
+
+# Doctor Dennis and Whispery Wendy exist only in the v2.0 firmware. The v1.8
+# ROM contains none of the ten voice-name strings, and feeding it [:nd] or
+# [:nw] produces output indistinguishable from Paul -- an unrecognised code
+# leaves the current voice in place -- while [:nb] stays clearly distinct, so
+# v1.8 does have voices, just not these two (DESIGN.md §6b, measured).
+#
+# Ordering above follows the ROM's own table at main-CPU 0x179AA, which is
+# also the manual's order.
+V20_ONLY_VOICES = frozenset({"dennis", "wendy"})
+
+
+def voices_for(firmware: str) -> dict[str, str]:
+	"""The voice table a given firmware actually implements."""
+	if firmware == "v18":
+		return {k: v for k, v in VOICES.items() if k not in V20_ONLY_VOICES}
+	return dict(VOICES)
 
 
 @dataclass(frozen=True)
@@ -95,9 +114,11 @@ VOICE_PARAM_DEFAULTS = {
 	"betty": {"g5": (68, 0, 80), "ap": (180, 30, 300), "pr": (160, 0, 250), "hs": (100, 40, 200), "br": (46, 0, 72), "ri": (0, 0, 100), "sm": (44, 0, 100), "la": (0, 0, 100), "as": (65, 0, 100)},
 	"harry": {"g5": (69, 0, 80), "ap": (78, 30, 300), "pr": (50, 0, 250), "hs": (120, 40, 200), "br": (0, 0, 72), "ri": (86, 0, 100), "sm": (34, 0, 100), "la": (0, 0, 100), "as": (100, 0, 100)},
 	"frank": {"g5": (74, 0, 80), "ap": (153, 30, 300), "pr": (90, 0, 250), "hs": (90, 40, 200), "br": (50, 0, 72), "ri": (80, 0, 100), "sm": (36, 0, 100), "la": (12, 0, 100), "as": (65, 0, 100)},
+	"dennis": {"g5": (74, 0, 80), "ap": (100, 30, 300), "pr": (135, 0, 250), "hs": (105, 40, 200), "br": (62, 0, 72), "ri": (0, 0, 100), "sm": (100, 0, 100), "la": (0, 0, 100), "as": (100, 0, 100)},
 	"kit": {"g5": (62, 0, 80), "ap": (306, 30, 300), "pr": (180, 0, 250), "hs": (80, 40, 200), "br": (40, 0, 72), "ri": (40, 0, 100), "sm": (44, 0, 100), "la": (0, 0, 100), "as": (65, 0, 100)},
 	"rita": {"g5": (72, 0, 80), "ap": (106, 30, 300), "pr": (80, 0, 250), "hs": (95, 40, 200), "br": (49, 0, 72), "ri": (0, 0, 100), "sm": (34, 0, 100), "la": (4, 0, 100), "as": (65, 0, 100)},
 	"ursula": {"g5": (69, 0, 80), "ap": (264, 30, 300), "pr": (135, 0, 250), "hs": (95, 40, 200), "br": (0, 0, 72), "ri": (100, 0, 100), "sm": (64, 0, 100), "la": (0, 0, 100), "as": (100, 0, 100)},
+	"wendy": {"g5": (80, 0, 80), "ap": (264, 30, 300), "pr": (135, 0, 250), "hs": (95, 40, 200), "br": (58, 0, 72), "ri": (0, 0, 100), "sm": (100, 0, 100), "la": (0, 0, 100), "as": (100, 0, 100)},
 	"val": {"g5": (72, 0, 80), "ap": (120, 30, 300), "pr": (100, 0, 250), "hs": (100, 40, 200), "br": (0, 0, 72), "ri": (80, 0, 100), "sm": (54, 0, 100), "la": (0, 0, 100), "as": (100, 0, 100)},
 }
 

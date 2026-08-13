@@ -207,6 +207,22 @@ class NativeMachine:
         mv = memoryview(pcm).cast("h")
         return max(max(mv), -min(mv))
 
+    def is_flat(self, pcm: bytes) -> bool:
+        """True if every sample in the block is the same value.
+
+        The DAC holds its last sample when the DSP's fifo drains (real
+        hardware behaviour, see dsp_pop_outfifo). If that held value is not
+        near zero the block reads as loud to peak_of() forever, even though a
+        constant level is silent through any speaker -- v1.8 has been observed
+        parking at 128, just over SILENCE_THRESHOLD, which stalled the
+        end-of-utterance detector until it hit its block ceiling (DESIGN.md
+        §22). Constant means no audio, whatever the level.
+        """
+        if not pcm:
+            return True
+        mv = memoryview(pcm).cast("h")
+        return min(mv) == max(mv)
+
     @property
     def volume(self) -> int:
         return self._lib.dtc01_get_volume(self._h)
