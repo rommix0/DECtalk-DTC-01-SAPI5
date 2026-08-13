@@ -246,12 +246,13 @@ def main() -> int:
     if romDir:
         shutil.copytree(romDir, dst_pkg / "roms")
 
-    # The update checker ships; the native smoke test does not -- it is a
-    # development tool that announces itself on every NVDA start.
+    # An allowlist, not a glob: the update checker and the ROM-folder settings
+    # panel ship, the native smoke test does not -- it is a development tool
+    # that announces itself on every NVDA start.
     plugins = stage / "globalPlugins"
     plugins.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ADDON / "globalPlugins" / "dtc01Updater.py",
-                 plugins / "dtc01Updater.py")
+    for name in ("dtc01Updater.py", "dtc01Settings.py"):
+        shutil.copy2(ADDON / "globalPlugins" / name, plugins / name)
 
     # The filename is the main thing standing between a private build and an
     # accidental upload, so make it impossible to confuse with a release.

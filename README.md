@@ -43,16 +43,24 @@ NVDA.
 
 ## Providing the ROMs
 
-Put the ROM files in:
+Put the ROM files in `dectalkDtc01\roms\` inside **your NVDA user
+configuration directory**:
 
 ```
-%APPDATA%\nvda\dectalkDtc01\roms\
+%APPDATA%\nvda\dectalkDtc01\roms\        installed copy of NVDA
+<portable folder>\userConfig\dectalkDtc01\roms\    portable copy
 ```
+
+If you are not sure which applies, open **NVDA menu → Preferences →
+Settings → DECtalk DTC-01**. That panel names the exact folder for your
+installation, reports which firmware versions were found there, and lets you
+point the driver at a different folder instead. It is available even when the
+synthesizer is not — which is the normal state before any ROMs are present.
 
 Filenames don't matter — chips are identified by content hash, so whatever
 naming your dump uses will work. The driver validates the full set before
-starting and refuses to run on an incomplete or altered one. You can also
-point `DTC01_ROM_DIR` at a directory instead.
+starting and refuses to run on an incomplete or altered one. `DTC01_ROM_DIR`
+overrides everything, for development.
 
 The expected set is the v2.0 firmware (first half tagged 23 Jul 84, second
 half 02 Jul 84) with the `23-204f4` / `23-205f4` DSP pair. Exact SHA1s are
@@ -108,6 +116,11 @@ Beyond the usual rate, volume and voice:
   [Firmware version](#firmware-version) above. Changing it restarts the
   emulator, so speech stops for a moment.
 
+The ROM folder itself lives in NVDA's own settings rather than the
+synthesizer's, under **DECtalk DTC-01** — the synthesizer has no settings
+until firmware is found, which is exactly when you need to be told where it
+goes.
+
 ### Voices
 
 v2.0 provides all ten the firmware implements: Perfect Paul, Beautiful
@@ -160,6 +173,23 @@ than removing the firmware silently.
 Updating a private build is therefore safe. The one case it cannot help is
 updating *from* a version older than 0.5.57, whose updater has no such
 guard — install 0.5.57 by hand on those machines first.
+
+**A second gap, closed in 0.6.0 but only for updates *after* it.** Until
+0.6.0 the guard skipped copying entirely when the config ROM folder already
+held anything at all — reasonable when a package could only ever bundle one
+firmware set, wrong once 0.6.0 let it bundle two. A machine whose own dump
+covered only v2.0 would lose the bundled v1.8 chips on update. Since 0.6.0
+the guard copies whatever the config folder is *missing*, compared by
+content hash rather than filename.
+
+The catch is structural, and worth understanding rather than working around:
+**the updater that performs an update is the old one, so a fix to it cannot
+protect the very update that replaces it.** Updating a private build older
+than 0.6.0 therefore hits this once, whatever the new version does. If that
+build bundled firmware your config folder does not already have, copy
+`<addon>\synthDrivers\dectalkDtc01\roms\` into
+`<NVDA config>\dectalkDtc01\roms\` **before** updating. From 0.6.0 onward it
+is handled for you.
 
 ### Release builds use PGO
 

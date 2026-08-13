@@ -185,6 +185,42 @@ BOOT_MAX_BLOCKS = 1000           # 25s hard ceiling on the whole announcement
 # different directories: a user whose config dir holds only a v2.0 dump gets
 # v2.0 from there and v1.8 from the add-on's bundled copy. A single cached
 # path would hand one version the other's directory.
+# NVDA config section holding the user's chosen ROM folder. Registered at
+# import so it exists whichever loads first -- this module or the global
+# plugin that presents the settings panel. Re-registering is harmless.
+CONFIG_SECTION = "dectalkDtc01"
+CONFIG_SPEC = {"romDir": 'string(default="")'}
+
+
+def ensureConfigSpec():
+	try:
+		config.conf.spec.setdefault(CONFIG_SECTION, {}).update(CONFIG_SPEC)
+	except Exception:
+		log.debugWarning("DTC-01: could not register config spec", exc_info=True)
+
+
+ensureConfigSpec()
+
+
+def configuredRomDir():
+	"""The ROM folder chosen in the settings panel, or "" if unset."""
+	try:
+		return (config.conf[CONFIG_SECTION]["romDir"] or "").strip()
+	except Exception:
+		return ""
+
+
+def defaultRomDir():
+	"""Where a new installation should put its ROMs.
+
+	NVDA's *user config* directory, which is not %APPDATA%\\nvda for a
+	portable copy -- so this is asked of NVDA rather than assembled from
+	environment variables wherever NVDA is available to ask.
+	"""
+	base = _configDir()
+	return os.path.join(base, "dectalkDtc01", "roms") if base else ""
+
+
 _romDirCache = {}
 _romVersionCache = None
 
@@ -223,16 +259,18 @@ def romVersion():
 
 
 def _candidateRomDirs():
+	# $DTC01_ROM_DIR first: it is the development override, and a developer
+	# pointing it somewhere deliberately should not be second-guessed by a
+	# setting they may have forgotten.
 	env = os.environ.get("DTC01_ROM_DIR")
 	if env:
 		yield env
-	try:
-		import globalVars
-		yield os.path.join(globalVars.appArgs.configPath, "dectalkDtc01", "roms")
-	except Exception:
-		appdata = os.environ.get("APPDATA")
-		if appdata:
-			yield os.path.join(appdata, "nvda", "dectalkDtc01", "roms")
+	configured = configuredRomDir()
+	if configured:
+		yield configured
+	default = defaultRomDir()
+	if default:
+		yield default
 	yield os.path.join(_HERE, "roms")
 
 
@@ -296,6 +334,16 @@ def findRomDir(refresh=False, version=None):
 		return path
 	_romDirCache[version] = ""
 	return None
+
+
+def refreshRomDirs():
+	"""Forget the resolved ROM directories, so a changed path takes effect.
+
+	The settings panel calls this after saving. Emulators already running keep
+	the ROM image they booted with -- it is baked in at creation -- so a new
+	path reaches the synth when it next starts.
+	"""
+	_romDirCache.clear()
 
 
 def installedFirmwares():
