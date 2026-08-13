@@ -43,7 +43,11 @@ def main() -> int:
 	# build\, so omitting dll_path silently trains against the wrong binary and
 	# produces no profile at all.
 	t0 = time.perf_counter()
-	m = NativeMachine(romDir, dll_path=str(dll))
+	# Pinned to v2.0, not left to $DTC01_ROM_VERSION: the profile has to
+	# describe the firmware releases actually run. An env var set for
+	# unrelated reasons would otherwise train against the wrong ROM, or fail
+	# here when the config dir holds no set for the version it names.
+	m = NativeMachine(romDir, dll_path=str(dll), rom_version="v20")
 	assert Path(m.dll_path).resolve() == dll.resolve(), m.dll_path
 	print(f"training against {m.dll_path} (instrumented -- expect it to be slow)")
 	m.run_samples(6000)                       # boot + power-on announcement

@@ -31,7 +31,11 @@ def load(dllPath, romDir):
 	sys.path.insert(0, str(ROOT / "addon" / "synthDrivers" / "dectalkDtc01"))
 	from emu.native import NativeMachine
 	os.add_dll_directory(str(Path(dllPath).resolve().parent))
-	return NativeMachine(romDir, dll_path=str(dllPath))
+	# Pinned to v2.0 rather than left to $DTC01_ROM_VERSION: this benchmarks
+	# the shipping default, and an env var set for unrelated reasons must not
+	# silently change what is measured -- or fail outright, which is what
+	# happens when it names a firmware the ROM dir does not hold.
+	return NativeMachine(romDir, dll_path=str(dllPath), rom_version="v20")
 
 
 def render(m, samples):

@@ -10,6 +10,7 @@ Every network path is wrapped, failures are logged rather than shown, and
 the check runs on a daemon thread so it cannot delay or block speech.
 """
 
+import hashlib
 import os
 import shutil
 import threading
@@ -134,6 +135,22 @@ def _configRomDir():
 	return os.path.join(base, ADDON_NAME, "roms")
 
 
+def _sha1(path):
+	h = hashlib.sha1()
+	with open(path, "rb") as f:
+		for block in iter(lambda: f.read(BLOCK), b""):
+			h.update(block)
+	return h.hexdigest()
+
+
+def _hashDir(path):
+	"""Content hashes of every file in a directory ({} if it does not exist)."""
+	if not os.path.isdir(path):
+		return set()
+	return {_sha1(os.path.join(path, n)) for n in os.listdir(path)
+			if os.path.isfile(os.path.join(path, n))}
+
+
 def _preserveBundledRoms():
 	"""Move a private build's firmware somewhere an update cannot destroy it.
 
@@ -162,26 +179,53 @@ def _preserveBundledRoms():
 	if not dest:
 		log.error("DTC-01 updater: no config directory; cannot preserve ROMs")
 		return False
+	# Copy whatever the destination is *missing*, rather than skipping the lot
+	# because it holds something. A package can bundle more than one firmware
+	# (v2.0 and v1.8 since 0.6.0) while the user's own dump covers only one --
+	# "already has its own dump" was true when there was only ever one set,
+	# and would now let an update delete the firmware the other half needed.
+	#
+	# Compared by content hash, not filename: the driver identifies chips by
+	# hash and dumps use arbitrary names, so equal names prove nothing and
+	# different names do not mean the chip is absent.
 	try:
-		existing = [n for n in os.listdir(dest)
-					if os.path.isfile(os.path.join(dest, n))] if os.path.isdir(dest) else []
+		existingHashes = _hashDir(dest)
 	except Exception:
-		existing = []
-	if existing:
-		# Already has its own dump, which the driver prefers anyway.
-		log.info("DTC-01 updater: %d ROM files already in %s; update is safe"
-				 % (len(existing), dest))
+		log.error("DTC-01 updater: could not read %s" % dest, exc_info=True)
+		return False
+
+	missing = []
+	for n in names:
+		try:
+			digest = _sha1(os.path.join(bundled, n))
+		except Exception:
+			log.error("DTC-01 updater: could not hash bundled %s" % n, exc_info=True)
+			return False
+		if digest not in existingHashes:
+			missing.append((n, digest))
+
+	if not missing:
+		log.info("DTC-01 updater: all %d bundled ROM files already present in "
+				 "%s; update is safe" % (len(names), dest))
 		return True
+
 	try:
 		os.makedirs(dest, exist_ok=True)
-		for n in names:
-			shutil.copy2(os.path.join(bundled, n), os.path.join(dest, n))
+		for n, digest in missing:
+			target = os.path.join(dest, n)
+			if os.path.exists(target):
+				# Same name, different content -- keep both rather than
+				# overwrite a chip the user may be relying on.
+				stem, ext = os.path.splitext(n)
+				target = os.path.join(dest, "%s-%s%s" % (stem, digest[:8], ext))
+			shutil.copy2(os.path.join(bundled, n), target)
+			existingHashes.add(digest)
 	except Exception:
 		log.error("DTC-01 updater: failed to copy bundled ROMs to %s" % dest,
 				  exc_info=True)
 		return False
-	log.info("DTC-01 updater: copied %d bundled ROM files to %s so the update "
-			 "cannot remove them" % (len(names), dest))
+	log.info("DTC-01 updater: copied %d bundled ROM file(s) to %s so the update "
+			 "cannot remove them" % (len(missing), dest))
 	return True
 
 

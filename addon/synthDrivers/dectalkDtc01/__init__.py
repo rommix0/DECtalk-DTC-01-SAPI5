@@ -488,7 +488,12 @@ class SynthDriver(SynthDriver):
 
 	@classmethod
 	def check(cls):
-		if findRomDir() is None:
+		# "Is *any* firmware usable?", not "is the one $DTC01_ROM_VERSION
+		# names usable?". __init__ already falls back to an installed version,
+		# so asking the narrower question here made a stale env var (or a
+		# saved choice whose dump was since removed) hide the synthesiser from
+		# NVDA's list entirely, rather than costing a log warning.
+		if not installedFirmwares():
 			return False
 		try:
 			from .emu.native import _find_dll
