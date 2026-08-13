@@ -169,6 +169,35 @@ BOOT_ANNOUNCE_WAIT_BLOCKS = 240  # 6s to start speaking before we give up
 BOOT_MAX_BLOCKS = 1000           # 25s hard ceiling on the whole announcement
 
 _romDirCache = None
+_romVersionCache = None
+
+
+def romVersion():
+	"""Which firmware version to run, from $DTC01_ROM_VERSION.
+
+	Env-var gate rather than a settings-panel entry. v1.8 does speak
+	correctly now (DESIGN.md §21), but the constants above the emulator were
+	all measured against v2.0 -- FIRMWARE_LINE_BYTES (§19's input cliff),
+	the boot-announcement windows below, and the NVRAM defaults, whose real
+	v1.8 image is still unknown. Those need re-measuring before v1.8 is a
+	choice worth putting in front of a user. A bad value falls back to the
+	default instead of leaving the user with no synth at all.
+	"""
+	global _romVersionCache
+	if _romVersionCache is None:
+		try:
+			_romVersionCache = rom_loader.resolve_version()
+		except ValueError as e:
+			log.warning(f"DTC-01: {e}; using {rom_loader.DEFAULT_VERSION}")
+			_romVersionCache = rom_loader.DEFAULT_VERSION
+		if _romVersionCache != rom_loader.DEFAULT_VERSION:
+			log.warning(
+				f"DTC-01: {rom_loader.VERSION_ENV} selects "
+				f"{rom_loader.ROM_SETS[_romVersionCache].description} -- "
+				f"it speaks, but timing and NVRAM defaults are still "
+				f"calibrated for "
+				f"{rom_loader.ROM_SETS[rom_loader.DEFAULT_VERSION].description}")
+	return _romVersionCache
 
 
 def _candidateRomDirs():
@@ -222,15 +251,20 @@ def _snip(text, limit=60):
 
 
 def findRomDir(refresh=False):
-	"""First directory holding a complete, checksum-valid ROM set, or None."""
+	"""First directory holding a complete, checksum-valid ROM set, or None.
+
+	"Complete" means for the *selected* firmware version only -- a dump of
+	just one version is a valid dump, so requiring both would reject it.
+	"""
 	global _romDirCache
 	if _romDirCache is not None and not refresh:
 		return _romDirCache or None
+	version = romVersion()
 	for path in _candidateRomDirs():
 		if not path or not os.path.isdir(path):
 			continue
 		try:
-			rom_loader.validate_rom_dir(path)
+			rom_loader.validate_rom_dir(path, version)
 		except rom_loader.RomValidationError:
 			continue
 		except Exception:
@@ -793,9 +827,10 @@ class SynthDriver(SynthDriver):
 		if romDir is None:
 			log.error("DTC-01: no valid ROM set found; synth cannot start")
 			return
+		version = romVersion()
 		for _ in range(count):
 			try:
-				machine = NativeMachine(romDir)
+				machine = NativeMachine(romDir, rom_version=version)
 			except NativeUnavailable:
 				log.error("DTC-01: native emulator DLL missing for this architecture",
 						  exc_info=True)
@@ -811,7 +846,8 @@ class SynthDriver(SynthDriver):
 			# how fast cancellation recovers.
 			if len(self._machines) == 1:
 				self._machineReady.set()
-				log.info(f"DTC-01: ready ({machine.version}), ROMs from {romDir}")
+				log.info(f"DTC-01: ready ({machine.version}), "
+						 f"{rom_loader.ROM_SETS[version].description} ROMs from {romDir}")
 		log.info(f"DTC-01: {len(self._machines)} emulator instance(s) booted")
 
 	def _swapToCleanMachine(self):

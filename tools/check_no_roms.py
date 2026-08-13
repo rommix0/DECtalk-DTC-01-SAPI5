@@ -25,8 +25,9 @@ sys.path.insert(0, str(ROOT / "addon" / "synthDrivers" / "dectalkDtc01"))
 
 from emu import rom_loader  # noqa: E402
 
-# Every chip the loader knows about, by content hash.
-ROM_SHA1 = {c.sha1: c.label for c in rom_loader.MAIN_CPU_ROMS + rom_loader.DSP_ROMS}
+# Every chip the loader knows about, by content hash -- both firmware
+# versions, since v1.8 is no less copyrighted than v2.0.
+ROM_SHA1 = {c.sha1: c.label for c in rom_loader.ALL_ROM_CHUNKS}
 
 # A dump that is not one of the known-good chips is still firmware. Files of
 # exactly these sizes get a closer look.

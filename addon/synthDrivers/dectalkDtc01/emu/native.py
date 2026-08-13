@@ -79,8 +79,10 @@ class NativeMachine:
     """Mirrors the useful surface of emu.machine.DectalkMachine, but pulls
     audio in blocks instead of via a per-sample callback."""
 
-    def __init__(self, rom_dir: str, dll_path: str | None = None):
+    def __init__(self, rom_dir: str, dll_path: str | None = None,
+                 rom_version: str | None = None):
         self._dll_path = _find_dll(dll_path)
+        self.rom_version = rom_loader.resolve_version(rom_version)
         lib = ctypes.CDLL(str(self._dll_path))
         self._lib = lib
 
@@ -115,8 +117,7 @@ class NativeMachine:
         lib.dtc01_version.restype = ctypes.c_char_p
         lib.dtc01_version.argtypes = []
 
-        main_image = bytes(rom_loader.build_main_cpu_image(rom_dir))
-        dsp = rom_loader.dsp_words(rom_dir)
+        main_image, dsp = rom_loader.build_images(rom_dir, self.rom_version)
 
         main_buf = (ctypes.c_uint8 * len(main_image)).from_buffer_copy(main_image)
         dsp_buf = (ctypes.c_uint16 * len(dsp))(*dsp)

@@ -3,6 +3,10 @@ for testing the emulator cores. Never run as part of addon packaging --
 output goes to build/, which is never included in the .nvda-addon zip.
 
 Usage: python tools/build_rom_images.py <rom_dir> [out_dir]
+
+Honours $DTC01_ROM_VERSION (v20 default, v18 experimental). Non-default
+versions get suffixed filenames so they can't quietly displace the v2.0
+images that native/selftest.c defaults to.
 """
 
 from __future__ import annotations
@@ -24,17 +28,25 @@ def main() -> int:
 	out_dir.mkdir(parents=True, exist_ok=True)
 
 	try:
-		main_image = rom_loader.build_main_cpu_image(rom_dir)
-		dsp_image = rom_loader.build_dsp_image(rom_dir)
+		version = rom_loader.resolve_version()
+		main_image = rom_loader.build_main_cpu_image(rom_dir, version)
+		dsp_image = rom_loader.build_dsp_image(rom_dir, version)
+	except ValueError as e:
+		print(e)
+		return 1
 	except rom_loader.RomValidationError as e:
 		print("ROM validation FAILED:")
 		print(e)
 		return 1
 
-	(out_dir / "maincpu.bin").write_bytes(main_image)
-	(out_dir / "dsp.bin").write_bytes(dsp_image)
-	print(f"OK: wrote {len(main_image)} bytes -> {out_dir / 'maincpu.bin'}")
-	print(f"OK: wrote {len(dsp_image)} bytes -> {out_dir / 'dsp.bin'}")
+	print(f"firmware: {rom_loader.ROM_SETS[version].description}")
+	suffix = "" if version == rom_loader.DEFAULT_VERSION else f"_{version}"
+	main_out = out_dir / f"maincpu{suffix}.bin"
+	dsp_out = out_dir / f"dsp{suffix}.bin"
+	main_out.write_bytes(main_image)
+	dsp_out.write_bytes(dsp_image)
+	print(f"OK: wrote {len(main_image)} bytes -> {main_out}")
+	print(f"OK: wrote {len(dsp_image)} bytes -> {dsp_out}")
 
 	# Sanity: 68000 reset vector is the first 8 bytes: initial SSP (4 bytes),
 	# initial PC (4 bytes). PC should point somewhere inside the 0x40000 ROM

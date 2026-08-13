@@ -114,6 +114,7 @@ def install_stubs():
 
     class _Log:
         def info(self, *a, **k): print("   [log.info]", *a)
+        def warning(self, *a, **k): print("   [log.WARN]", *a)
         def error(self, *a, **k): print("   [log.ERROR]", *a)
         def debugWarning(self, *a, **k): pass
         def exception(self, *a, **k): print("   [log.EXC]", *a)
