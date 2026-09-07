@@ -1,0 +1,92 @@
+name: NVDA API check
+
+# Diffs every NVDA symbol the add-on imports against a real NVDA tree, using
+# tools/check_nvda_api.py. The point of running it here (rather than only at
+# package time, which make_addon.py already does against the locally installed
+# NVDA) is early warning for the *next* API-breaking release: NVDA 2027.1.
+#
+# The "alpha" channel is the 2027.1 development branch. The daily schedule
+# means a symbol NVDA removes upstream turns this red within a day, even with
+# no commit on our side.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # 06:17 UTC daily -- off the top of the hour, per GitHub's guidance.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  api-check:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # "alpha" == the NVDA 2027.1 dev branch: the reason this workflow
+        # exists. "stable" guards against regressing current compatibility.
+        # Add "beta" here during an NVDA beta cycle if useful.
+        channel: [alpha, stable]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Match NVDA's interpreter (2026.x / 2027.1 alpha are Python 3.13),
+          # so check_nvda_api.py's stdlib-module filter matches NVDA's.
+          python-version: "3.13"
+
+      - name: Download newest NVDA ${{ matrix.channel }} installer
+        run: |
+          python tools/ci_fetch_nvda.py `
+            --channel ${{ matrix.channel }} `
+            --out "${{ runner.temp }}\nvda-setup.exe"
+
+      - name: Build a portable NVDA from it
+        run: |
+          $setup    = "${{ runner.temp }}\nvda-setup.exe"
+          $portable = "${{ runner.temp }}\nvda-portable"
+          New-Item -ItemType Directory -Force -Path $portable | Out-Null
+
+          # Silent portable creation: no GUI, no install, no launch. This is
+          # the supported headless way to get NVDA's library.zip + *.pyd tree.
+          $proc = Start-Process -FilePath $setup -PassThru -ArgumentList @(
+            "--create-portable-silent",
+            "--portable-path=$portable",
+            "--no-launch"
+          )
+
+          $deadline = (Get-Date).AddMinutes(5)
+          while (-not $proc.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep 5 }
+          if (-not $proc.HasExited) {
+            $proc.Kill()
+            throw "NVDA portable creation did not finish within 5 minutes"
+          }
+
+          # Guard against the launcher handing off to a temp bootstrap that
+          # outlives the process we waited on: also wait for the payload.
+          $lib = Join-Path $portable "library.zip"
+          $deadline = (Get-Date).AddMinutes(2)
+          while (-not (Test-Path $lib) -and (Get-Date) -lt $deadline) { Start-Sleep 5 }
+          if (-not (Test-Path $lib)) {
+            Write-Host "::group::contents of $portable"
+            Get-ChildItem -Recurse -Depth 1 $portable -ErrorAction SilentlyContinue |
+              Select-Object -First 60 | Format-Table -AutoSize | Out-String | Write-Host
+            Write-Host "::endgroup::"
+            throw "portable NVDA has no library.zip -- silent portable creation failed"
+          }
+
+          "NVDA_PORTABLE=$portable" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "portable NVDA ready at $portable"
+
+      - name: check_nvda_api.py against NVDA ${{ matrix.channel }}
+        run: python tools/check_nvda_api.py "$env:NVDA_PORTABLE"

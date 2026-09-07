@@ -149,6 +149,14 @@ Packaging refuses to run if any NVDA symbol the add-on imports is missing
 from your installed NVDA (`tools/check_nvda_api.py`), and the add-on is
 verified to contain no ROM data.
 
+The same import check runs in CI against both the current stable NVDA and
+the **alpha** channel -- the NVDA 2027.1 development branch -- on every push
+and once a day (`.github/workflows/nvda-api-check.yml`). The daily run is the
+early-warning for the next API-breaking release: if NVDA removes a symbol the
+add-on uses, the build goes red within a day. `tools/ci_fetch_nvda.py`
+resolves the newest installer for a channel; the workflow has it build a
+portable copy and points the checker at that.
+
 ### Private builds with firmware bundled
 
 `python tools\make_addon.py --with-roms` bundles a ROM set into the package
