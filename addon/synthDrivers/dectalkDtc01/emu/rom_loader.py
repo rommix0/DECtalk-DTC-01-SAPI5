@@ -51,11 +51,19 @@ class RomSet:
 	    v2.0 + 165/166   peak  9232  rms  193  clipped 0    <- quiet
 
 	Keeping them in one record makes the wrong combination unrepresentable.
+
+	`dsp` is a tuple of *candidate* DSP pairs in preference order, not a
+	single pair: v2.0 shipped two DSP revisions -- the later 409/410 pair and
+	the older 204/205 pair -- and a dump may hold either or both. The loader
+	uses the first candidate a dump can satisfy, so 409/410 is preferred when
+	present (it removes an audible crackle 204/205 has -- confirmed by
+	listening) while a 204/205-only dump still works. v1.8 has just one
+	candidate pair.
 	"""
 	name: str  # "v20" / "v18", matching MAME's -bios names
 	description: str
 	main_cpu: tuple[RomChunk, ...]
-	dsp: tuple[RomChunk, ...]
+	dsp: tuple[tuple[RomChunk, ...], ...]  # candidate DSP pairs, preferred first
 
 
 MAIN_CPU_IMAGE_SIZE = 0x40000
@@ -105,16 +113,29 @@ MAIN_CPU_ROMS_V18: tuple[RomChunk, ...] = (
 	RomChunk("a743a23625feadf6e46ef889e2bb04af88589992", 0x4000, 0x38001, "23-037e5 @E15"),
 )
 
-# TMS32010 DSP program ROM. The "204/205" pair ships with v2.0 units and is
-# the one MAME's comments call clean; "165/166" is the v1.8-era pair.
-DSP_ROMS_V20: tuple[RomChunk, ...] = (
+# TMS32010 DSP program ROM. Each chip supplies the high (offset 0x000) or low
+# (offset 0x001) byte of every big-endian word.
+#
+# v2.0 has two DSP revisions in the wild. The later "409/410" pair is
+# preferred: 204/205 emulates with an audible crackle on v2.0 that 409/410
+# does not (confirmed by listening -- Phase-0 crackle investigation), and
+# dumps that carry both file 409/410 as the primary set with 204/205 demoted
+# to an "older" folder. "204/205" is MAME's pair and is kept as a fallback so
+# a dump holding only it still works. "165/166" is the v1.8-era pair.
+DSP_ROMS_V20_409: tuple[RomChunk, ...] = (
+	RomChunk("3fabe018d0e0b478093951cb20501853358faa18", 0x800, 0x000, "23-410f4 @E70"),
+	RomChunk("9a13426c92f879f2953f180f805990a91c37ac43", 0x800, 0x001, "23-409f4 @E69"),
+)
+DSP_ROMS_V20_204: tuple[RomChunk, ...] = (
 	RomChunk("3136bae243ef48721e21c66fde70dab5fc3c21d0", 0x800, 0x000, "23-205f4 @E70"),
 	RomChunk("9409f90f7a397b041e4440341f2d7934cb479285", 0x800, 0x001, "23-204f4 @E69"),
 )
-DSP_ROMS_V18: tuple[RomChunk, ...] = (
+# Preference order: 409/410 first, 204/205 fallback.
+DSP_ROMS_V20: tuple[tuple[RomChunk, ...], ...] = (DSP_ROMS_V20_409, DSP_ROMS_V20_204)
+DSP_ROMS_V18: tuple[tuple[RomChunk, ...], ...] = ((
 	RomChunk("e8c25ca092dde2dc0aec73921af806026bdfbbc3", 0x800, 0x000, "23-166f4 @E70"),
 	RomChunk("249f269c38f7f44edb6d025bcc867c8ca0de3e9c", 0x800, 0x001, "23-165f4 @E69"),
-)
+),)
 
 ROM_SETS: dict[str, RomSet] = {
 	"v20": RomSet("v20", "DTC-01 Version 2.0", MAIN_CPU_ROMS_V20, DSP_ROMS_V20),
@@ -124,13 +145,16 @@ DEFAULT_VERSION = "v20"
 VERSION_ENV = "DTC01_ROM_VERSION"
 
 # Back-compat aliases: plenty of callers pre-date the version split and mean
-# "the normal firmware".
+# "the normal firmware". DSP_ROMS is the preferred v2.0 pair (a flat tuple of
+# chunks, as before), not the candidate list.
 MAIN_CPU_ROMS = MAIN_CPU_ROMS_V20
-DSP_ROMS = DSP_ROMS_V20
+DSP_ROMS = DSP_ROMS_V20_409
 
-# Every chip of every version, for the "never ship firmware" content check.
+# Every chip of every version and every DSP revision, for the "never ship
+# firmware" content check -- both DSP pairs are copyrighted firmware.
 ALL_ROM_CHUNKS: tuple[RomChunk, ...] = tuple(
-	c for s in ROM_SETS.values() for c in s.main_cpu + s.dsp
+	c for s in ROM_SETS.values()
+	for c in (s.main_cpu + tuple(chip for pair in s.dsp for chip in pair))
 )
 
 # Spellings a human might plausibly type into the env var.
@@ -196,6 +220,25 @@ def _assemble(files_by_sha1: dict[str, bytes], chunks: tuple[RomChunk, ...],
 	return bytes(image)
 
 
+def _assemble_dsp(files_by_sha1: dict[str, bytes],
+                  candidates: tuple[tuple[RomChunk, ...], ...]) -> bytes:
+	"""Assemble the first DSP candidate pair the dump can satisfy.
+
+	Candidates are tried in preference order (409/410 before 204/205 for
+	v2.0). Only if *every* candidate is incomplete is an error raised, and it
+	reports each attempt so the message names which pair(s) were missing what.
+	"""
+	failures: list[str] = []
+	for pair in candidates:
+		try:
+			return _assemble(files_by_sha1, pair, DSP_IMAGE_SIZE)
+		except RomValidationError as e:
+			failures.append(str(e))
+	raise RomValidationError(
+		"no complete DSP ROM pair found; tried:\n" + "\n".join(failures)
+	)
+
+
 def build_main_cpu_image(rom_dir: str, version: str | None = None) -> bytes:
 	"""Assemble the 0x40000-byte 68000 program ROM image from rom_dir."""
 	return _assemble(_index_dir_by_sha1(rom_dir), rom_set(version).main_cpu,
@@ -210,9 +253,10 @@ def build_dsp_image(rom_dir: str, version: str | None = None) -> bytes:
 	main CPU ROMs, not independently verified for the DSP region -- see
 	DESIGN.md section 8. If the TMS32010 core fails to boot sensibly, check
 	this byte order first.
+
+	The preferred DSP revision present in rom_dir is used (see RomSet.dsp).
 	"""
-	return _assemble(_index_dir_by_sha1(rom_dir), rom_set(version).dsp,
-	                 DSP_IMAGE_SIZE)
+	return _assemble_dsp(_index_dir_by_sha1(rom_dir), rom_set(version).dsp)
 
 
 def dsp_words(rom_dir: str, version: str | None = None) -> list[int]:
@@ -228,7 +272,7 @@ def build_images(rom_dir: str, version: str | None = None) -> tuple[bytes, list[
 	files = _index_dir_by_sha1(rom_dir)
 	rs = rom_set(version)
 	main = _assemble(files, rs.main_cpu, MAIN_CPU_IMAGE_SIZE)
-	dsp = _assemble(files, rs.dsp, DSP_IMAGE_SIZE)
+	dsp = _assemble_dsp(files, rs.dsp)
 	return main, [(dsp[i] << 8) | dsp[i + 1] for i in range(0, len(dsp), 2)]
 
 
@@ -244,7 +288,7 @@ def available_versions(rom_dir: str) -> list[str]:
 	for name, rs in ROM_SETS.items():
 		try:
 			_assemble(files, rs.main_cpu, MAIN_CPU_IMAGE_SIZE)
-			_assemble(files, rs.dsp, DSP_IMAGE_SIZE)
+			_assemble_dsp(files, rs.dsp)
 		except RomValidationError:
 			continue
 		found.append(name)
@@ -260,11 +304,13 @@ def validate_rom_dir(rom_dir: str, version: str | None = None) -> None:
 	rs = rom_set(version)
 	files = _index_dir_by_sha1(rom_dir)
 	errors: list[str] = []
-	for label, chunks, size in (("main CPU", rs.main_cpu, MAIN_CPU_IMAGE_SIZE),
-	                            ("DSP", rs.dsp, DSP_IMAGE_SIZE)):
-		try:
-			_assemble(files, chunks, size)
-		except RomValidationError as e:
-			errors.append(f"[{rs.description} {label}] {e}")
+	try:
+		_assemble(files, rs.main_cpu, MAIN_CPU_IMAGE_SIZE)
+	except RomValidationError as e:
+		errors.append(f"[{rs.description} main CPU] {e}")
+	try:
+		_assemble_dsp(files, rs.dsp)
+	except RomValidationError as e:
+		errors.append(f"[{rs.description} DSP] {e}")
 	if errors:
 		raise RomValidationError("\n".join(errors))

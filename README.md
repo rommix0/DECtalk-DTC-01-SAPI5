@@ -38,7 +38,8 @@ NVDA.
 ## Requirements
 
 * NVDA 2025.1 or later (64-bit or 32-bit -- both emulator cores ship in the package)
-* Your own DTC-01 v2.0 ROM dump (16 main-CPU chips + the `204`/`205` DSP pair).
+* Your own DTC-01 v2.0 ROM dump (16 main-CPU chips + a DSP pair — either the
+  later `409`/`410` pair, which is preferred, or the older `204`/`205`).
   The v1.8 firmware is optional — see [Firmware version](#firmware-version).
 
 ## Providing the ROMs
@@ -63,7 +64,10 @@ starting and refuses to run on an incomplete or altered one. `DTC01_ROM_DIR`
 overrides everything, for development.
 
 The expected set is the v2.0 firmware (first half tagged 23 Jul 84, second
-half 02 Jul 84) with the `23-204f4` / `23-205f4` DSP pair. Exact SHA1s are
+half 02 Jul 84) with a DSP pair — the later `23-409f4` / `23-410f4` is
+preferred and the older `23-204f4` / `23-205f4` is accepted as a fallback.
+When a dump holds both, `409/410` is used: it is the same voice, without the
+faint crackle `204/205` has on v2.0 (confirmed by listening). Exact SHA1s are
 listed in [DESIGN.md](DESIGN.md) §2.
 
 ### Firmware version
@@ -74,7 +78,7 @@ The DTC-01 shipped with two firmware revisions, and both can be run:
 |---|---|---|
 | Dated | Jul 1984 | Oct/Dec 1983 |
 | Main CPU | `23-095`…`106`, `23-119`…`126` | `23-031`…`038`, `23-059`…`066` |
-| DSP pair | `23-204` / `23-205` | `23-165` / `23-166` |
+| DSP pair | `23-409` / `23-410` (or `23-204` / `23-205`) | `23-165` / `23-166` |
 | Voices | 10 | 8 (no Doctor Dennis or Whispery Wendy) |
 
 Select it in the synthesizer settings under **Firmware version**. Only

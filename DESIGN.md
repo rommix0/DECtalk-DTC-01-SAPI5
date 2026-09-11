@@ -54,10 +54,10 @@ Local copy: `research/mame_dectalk.cpp`.
   screen-reader use case — stub it to always-idle/no tone/no ring.
 
 ## 2. ROM layout (verified SHA1, v2.0 firmware — first-half tag 23Jul84,
-   second-half tag 02Jul84 — plus the "clean" DSP `204/205` pair which the
-   driver's own comments say doesn't clip, unlike `165/166` or `409/410`
-   — but see §21: `165/166` does not clip with v2.0, it is just quieter,
-   and it is the pair v1.8 requires)
+   second-half tag 02Jul84 — with a DSP pair. `409/410` is now preferred for
+   v2.0 (see §21: it works once the FIFO bug is fixed, and is crackle-free
+   where `204/205` has a faint crackle); `204/205` is kept as a fallback.
+   `165/166` is the v1.8 pair — quieter with v2.0, not clipping.)
 
 Main CPU ROM region is `ROM_REGION16_BE(0x40000, "maincpu")`: 16 chips of
 0x4000 bytes each, **byte-interleaved** (`ROM_SKIP(1)`) into a linear
@@ -90,9 +90,18 @@ DSP ROM region `ROM_REGION(0x2000, "dsp")`, two 0x800-byte chips,
 byte-interleaved into a 0x800-word (2048 word) TMS32010 program image:
 
 ```
+Preferred v2.0 DSP pair (409/410):
+word offset 0x000 (even bytes) e70  3fabe018d0e0b478093951cb20501853358faa18  (23-410f4)
+word offset 0x001 (odd bytes)  e69  9a13426c92f879f2953f180f805990a91c37ac43  (23-409f4)
+
+Fallback v2.0 DSP pair (204/205):
 word offset 0x000 (even bytes) e70  3136bae243ef48721e21c66fde70dab5fc3c21d0  (23-205f4)
 word offset 0x001 (odd bytes)  e69  9409f90f7a397b041e4440341f2d7934cb479285  (23-204f4)
 ```
+
+`rom_loader.RomSet.dsp` lists these as ordered candidate pairs and uses the
+first a dump can satisfy (409/410 before 204/205). See §21 for why 409/410 is
+preferred.
 
 All of the above were confirmed byte-for-byte against the user's dump on
 2026-07-28 (`sha1sum` on `roms_extracted/*`).
@@ -1353,6 +1362,26 @@ reproduces its other note, that 165/166 works with v2.0 but comes out
 quieter (rms 193 vs 1157). Note this corrects §2's parenthetical, which
 lumped 165/166 in with 409/410 as "clipping": 165/166 does not clip with
 v2.0, it is merely quiet, and it is the *correct* pair for v1.8.
+
+### 409/410 is the preferred v2.0 DSP pair (crackle fix, 2026-09-11)
+
+The four-combination table above never included the newer 409/410 pair,
+because at the time it fell under the MAME TODO below — the "newer -409/-410"
+DSP produced no sound while 204/205 worked, all down to the busted FIFO
+implementation. Fixing that FIFO bug (RESOLVED, below) is what made 165/166
+speak for v1.8; the *same* fix makes 409/410 speak for v2.0. It had simply
+never been retried, since 204/205 already worked.
+
+Retried now, 409/410 works and sounds **cleaner than 204/205 on v2.0**:
+204/205 carries a faint crackle that 409/410 does not (confirmed by
+listening; the two differ in ~64% of samples on the same utterance, with no
+clipping in either). 409/410 is also the pair dumps file as primary, with
+204/205 demoted to an `older/` folder. Byte order matches 204/205 — 410 is
+the high byte (offset 0x000, @E70), 409 the low byte (offset 0x001, @E69);
+the swap yields silence.
+
+`rom_loader` therefore prefers 409/410 and falls back to 204/205, so both
+kinds of dump work. Regression: `tools/test_rom_dsp_preference.py`.
 
 ### v1.8's audio was broken — what it was NOT (kept: the ruled-out list)
 
