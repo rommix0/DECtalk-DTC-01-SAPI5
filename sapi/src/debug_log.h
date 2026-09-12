@@ -32,7 +32,10 @@ inline constexpr long MAX_LOG_BYTES = 4 * 1024 * 1024;
 inline bool BuildLogPath(wchar_t* path, size_t size, const wchar_t* suffix)
 {
     wchar_t base[MAX_PATH];
-    if (GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH) == 0) {
+    // A 0 return is "not set"; a return >= MAX_PATH means the buffer wasn't
+    // filled (the real value is longer) -- both fall through to %TEMP%.
+    const DWORD got = GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH);
+    if (got == 0 || got >= MAX_PATH) {
         if (GetTempPathW(MAX_PATH, base) == 0) {
             return false;
         }
@@ -104,8 +107,13 @@ inline const char* ProcessTag()
         name = name ? name + 1 : exe;
         char narrow[48] = {};
         WideCharToMultiByte(CP_UTF8, 0, name, -1, narrow, sizeof(narrow) - 1, nullptr, nullptr);
-        sprintf_s(tag, "%s/%d-bit pid %lu", narrow,
-                  static_cast<int>(sizeof(void*) * 8), GetCurrentProcessId());
+        // _snprintf_s with _TRUNCATE (not sprintf_s): sprintf_s on overflow
+        // invokes the invalid-parameter handler and aborts the process --
+        // fatal for a SAPI host whose exe basename happens to be long, and
+        // logging defaults ON. Truncating the tag is harmless; crashing the
+        // host on the first log line is not.
+        _snprintf_s(tag, sizeof(tag), _TRUNCATE, "%s/%d-bit pid %lu", narrow,
+                    static_cast<int>(sizeof(void*) * 8), GetCurrentProcessId());
     }
     return tag;
 }

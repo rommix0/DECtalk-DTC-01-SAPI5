@@ -336,9 +336,16 @@ bool DectalkTtsEngine::ensure_machine()
         const std::wstring dll_path = resolve_core_dll();
         const std::wstring firmware_w = dectalk::utils::string_to_wstring(firmware_);
 
-        DECTALK_LOG("DectalkTtsEngine: ensure_machine voice=%s firmware=%s rom_dir=%s",
-                    voice_key_.c_str(), firmware_.c_str(),
-                    dectalk::utils::wstring_to_string(rom_dir).c_str());
+        // Guarded explicitly (rather than relying on DECTALK_LOG/Log()'s own
+        // Enabled() check) because wstring_to_string(rom_dir) heap-allocates;
+        // a plain function-call macro evaluates its arguments regardless of
+        // whether Log() ends up doing anything with them, and logging OFF
+        // must not cost an allocation on this path.
+        if (DebugLog::Enabled()) {
+            DECTALK_LOG("DectalkTtsEngine: ensure_machine voice=%s firmware=%s rom_dir=%s",
+                        voice_key_.c_str(), firmware_.c_str(),
+                        dectalk::utils::wstring_to_string(rom_dir).c_str());
+        }
 
         RomImages images = dtc01::load_rom_images(rom_dir, firmware_w);
         machine_ = dtc01::Machine::create(images.main, images.dsp, dll_path);

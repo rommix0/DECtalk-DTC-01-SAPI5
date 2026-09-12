@@ -56,9 +56,15 @@ constexpr int kSilenceThreshold = 120;
 std::unique_ptr<Machine> Machine::create(const std::vector<uint8_t>& main_img,
                                           const std::vector<uint16_t>& dsp_words,
                                           const std::wstring& dll_path) {
-    DECTALK_LOG("dtc01_core: Machine::create dll=%s main_bytes=%zu dsp_words=%zu",
-                dectalk::utils::wstring_to_string(dll_path).c_str(),
-                main_img.size(), dsp_words.size());
+    // Guarded explicitly: wstring_to_string(dll_path) heap-allocates, and
+    // DECTALK_LOG is a plain function call whose arguments evaluate before
+    // Log()'s own Enabled() check -- logging OFF must not cost an
+    // allocation on this path.
+    if (DebugLog::Enabled()) {
+        DECTALK_LOG("dtc01_core: Machine::create dll=%s main_bytes=%zu dsp_words=%zu",
+                    dectalk::utils::wstring_to_string(dll_path).c_str(),
+                    main_img.size(), dsp_words.size());
+    }
 
     HMODULE mod = LoadLibraryW(dll_path.c_str());
     if (!mod) {
