@@ -456,6 +456,13 @@ STDMETHODIMP DectalkTtsEngine::Speak(
         for (const SPVTEXTFRAG* frag = pTextFragList; frag && !aborted; frag = frag->pNext) {
             const DWORD actions = pOutputSite->GetActions();
             if (actions & SPVES_ABORT) {
+                // Set aborted (not just break): a multi-fragment utterance can
+                // hit this fragment-boundary check after an earlier fragment
+                // already fed real speech to machine_, so the post-loop
+                // reset-and-recover below (see its comment) must still run --
+                // otherwise that earlier fragment's leftover queued speech
+                // survives into the next Speak() call uncleaned.
+                aborted = true;
                 break;
             }
             if (actions & SPVES_RATE) {
@@ -664,6 +671,37 @@ STDMETHODIMP DectalkTtsEngine::Speak(
             default:
                 break;  // SPVA_ParseUnknown and friends: nothing to speak.
             }
+        }
+
+        // The DTC-01 firmware has no abort/interrupt character (design spec
+        // §4.3): whatever was already fed to it via feed_text() above stays
+        // queued and keeps producing audio regardless of whether the host is
+        // still listening, and machine_ persists across Speak() calls -- so
+        // on abort that leftover speech would otherwise sit ahead of (and
+        // bleed into/lengthen) whatever the *next* Speak() call feeds.
+        //
+        // A block-by-block "run until is_idle()" drain is NOT reliable here:
+        // the firmware's FIFOs can look transiently idle during its
+        // letter-to-sound lead-in before any of the just-fed text has
+        // actually been turned into queued speech (the same gotcha the
+        // per-fragment pump above guards against with speech_started -- see
+        // its comment). An abort landing inside that lead-in window would
+        // make a naive idle-drain declare victory immediately while nearly
+        // the whole aborted utterance is still queued, which is exactly the
+        // corruption this soak exists to catch.
+        //
+        // A hard reset is the only fully deterministic way to guarantee no
+        // residual state survives, and it's cheap (consume_boot_announcement
+        // typically finishes in well under a second, per its own pacing)
+        // next to the alternative of actually playing multiple seconds of
+        // leftover speech out silently. Every Speak() call already re-sends
+        // the voice/rate/volume/DV-slider commands as a prefix (see `fed`
+        // above), so nothing meaningful is lost by resetting between calls.
+        if (aborted) {
+            machine_->reset();
+            machine_->consume_boot_announcement();
+            DECTALK_LOG("DectalkTtsEngine: Speak aborted; reset the machine so the next "
+                        "utterance starts clean");
         }
 
         DECTALK_LOG("DectalkTtsEngine: Speak done, aborted=%d, %llu audio bytes written",

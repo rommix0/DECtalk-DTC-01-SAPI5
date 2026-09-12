@@ -49,6 +49,12 @@ add_dtc_tool(dump_pipeline)
 # ISpObjectToken stand-in and WAV writer (see tools/sapi_probe.cpp).
 add_dtc_tool(sapi_probe sapi ole32 oleaut32 advapi32)
 
+# cancel_probe (Task E2): drives the real DectalkDtc01SAPI.dll coclass through
+# repeated mid-stream SPVES_ABORT cancellations (a soak for the real cancel
+# path a SAPI host takes) -- same DllGetClassObject/no-registration load as
+# sapi_probe above (see tools/cancel_probe.cpp).
+add_dtc_tool(cancel_probe sapi ole32 oleaut32 advapi32)
+
 # The in-proc COM server: DectalkTtsEngine.cpp and com.cpp already live in
 # dtc01common (linked below), so the DLL target itself is just the four
 # exported entry points in sapi_main.cpp plus the .def that exports them --
