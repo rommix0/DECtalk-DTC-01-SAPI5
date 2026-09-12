@@ -447,8 +447,22 @@ int wmain(int argc, wchar_t** argv)
         VoiceResult r = run_voice(mod, get_class, voice);
 
         wchar_t key_w[64] = {}, fw_w[16] = {};
-        MultiByteToWideChar(CP_UTF8, 0, voice.key, -1, key_w, 64);
-        MultiByteToWideChar(CP_UTF8, 0, voice.firmware, -1, fw_w, 16);
+        const int key_chars = MultiByteToWideChar(CP_UTF8, 0, voice.key, -1, key_w, 64);
+        const int fw_chars = MultiByteToWideChar(CP_UTF8, 0, voice.firmware, -1, fw_w, 16);
+        if (key_chars == 0 || fw_chars == 0) {
+            // voices.hpp's key/firmware strings are always short ASCII
+            // literals, so this should never actually fail -- but if it
+            // ever did (e.g. a future entry with unexpected bytes and a
+            // buffer too small), silently proceeding with an empty key_w
+            // would misreport the failing voice as some *other* voice
+            // (or as blank) rather than surfacing the real problem.
+            swprintf_s(line, L"[FAIL] <name conversion error for voice index %d, GetLastError=%lu>\n",
+                       i, GetLastError());
+            report += line;
+            wprintf(L"%s", line);
+            ++fail_count;
+            continue;
+        }
 
         swprintf_s(line, L"[%s] %-8s / %-4s (%s, %s) : SetToken=0x%08X Format=0x%08X(%s) Speak=0x%08X bytes=%zu dur=%.2fs\n",
                    r.pass ? L"PASS" : L"FAIL",

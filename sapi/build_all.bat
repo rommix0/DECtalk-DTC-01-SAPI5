@@ -133,8 +133,9 @@ if exist "%OUTPUT_DIR%\DectalkDiagnostics.exe"      echo   DectalkDiagnostics.ex
 if exist "%OUTPUT_DIR%\x64\DectalkDtc01SAPI.dll"    echo   x64\DectalkDtc01SAPI.dll
 if exist "%OUTPUT_DIR%\x64\dtc01_x64.dll"           echo   x64\dtc01_x64.dll
 if exist "%OUTPUT_DIR%\x64\DectalkDiagnostics.exe"  echo   x64\DectalkDiagnostics.exe
-if exist "%OUTPUT_DIR%\roms\v20"                    echo   roms\v20\
-if exist "%OUTPUT_DIR%\roms\v18"                    echo   roms\v18\
+rem ROM counts were already printed live by :stage_roms during the "Staging
+rem ROMs" step above (see its comment for why the count isn't re-reported
+rem here via a separate call).
 if exist "%OUTPUT_DIR%\DectalkDtc01SAPI_Setup.exe"  echo   DectalkDtc01SAPI_Setup.exe (installer)
 endlocal
 exit /b 0
@@ -145,6 +146,16 @@ rem output\roms\<dest> (non-recursive -- the engine indexes the ROM dir by
 rem SHA-1 without descending into subdirs, so DSP files must sit alongside
 rem the main ROMs). Missing E: source dirs are a WARNING, not a build
 rem failure -- the DLL/exe staging above must still succeed either way.
+rem
+rem Reports the actual staged *.rom file count itself (rather than a
+rem separate summary-time subroutine call) so a copy that silently matched
+rem zero files still shows up as "0 *.rom files" instead of looking
+rem identical to a fully-staged firmware. (An earlier version of this script
+rem called a separate :report_rom_count label from :summary; that tripped a
+rem reproducible cmd.exe label-lookup quirk -- the first of two back-to-back
+rem CALLs to a freshly-added label failed with "batch label not found" while
+rem the second succeeded. Counting inline here, in a subroutine already
+rem proven to work, avoids the whole class of bug.)
 :stage_roms
 setlocal
 set "SRC=%ROMS_ROOT%\%~1"
@@ -152,11 +163,30 @@ set "DEST=%OUTPUT_DIR%\roms\%~2"
 if not exist "%SRC%" (
     echo WARNING: ROM source not found: "%SRC%"
     echo          Skipping %~2 ROM staging -- ROMs must be supplied manually.
+    echo   roms\%~2\ - 0 *.rom files
     endlocal
     exit /b 0
 )
 if not exist "%DEST%" mkdir "%DEST%"
+
 copy /Y "%SRC%\*.rom" "%DEST%\" >nul
-if exist "%SRC%\DSP\*.rom" copy /Y "%SRC%\DSP\*.rom" "%DEST%\" >nul
+if errorlevel 1 (
+    echo WARNING: ROM copy failed or matched no files: "%SRC%\*.rom" -^> "%DEST%\"
+    echo          %~2 top-level ROM staging may be incomplete -- check for a lock, AV
+    echo          quarantine, a rename, or a full disk, then re-run build_all.bat.
+)
+
+if exist "%SRC%\DSP\*.rom" (
+    copy /Y "%SRC%\DSP\*.rom" "%DEST%\" >nul
+    if errorlevel 1 (
+        echo WARNING: ROM copy failed: "%SRC%\DSP\*.rom" -^> "%DEST%\"
+        echo          %~2 DSP ROM staging may be incomplete -- check for a lock, AV
+        echo          quarantine, a rename, or a full disk, then re-run build_all.bat.
+    )
+)
+
+set "CNT=0"
+for %%f in ("%DEST%\*.rom") do set /a CNT+=1
+echo   roms\%~2\ - %CNT% *.rom files
 endlocal
 exit /b 0

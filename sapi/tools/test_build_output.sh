@@ -69,11 +69,16 @@ check_roms() {
     fi
 }
 
-if [ -d "$ROM_V20_SRC" ] && [ -d "$ROM_V18_SRC" ]; then
+if [ -d "$ROM_V20_SRC" ]; then
     check_roms "$OUT_DIR/roms/v20" "$OUT_DIR/roms/v20"
+else
+    echo "SKIP: v2.0 ROM source dir not present on this machine; skipping v20 ROM staging assertion"
+fi
+
+if [ -d "$ROM_V18_SRC" ]; then
     check_roms "$OUT_DIR/roms/v18" "$OUT_DIR/roms/v18"
 else
-    echo "SKIP: ROM source dirs not present on this machine; skipping ROM staging assertions"
+    echo "SKIP: v1.8 ROM source dir not present on this machine; skipping v18 ROM staging assertion"
 fi
 
 if [ $FAILED -ne 0 ]; then
