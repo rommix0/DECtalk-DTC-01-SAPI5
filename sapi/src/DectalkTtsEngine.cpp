@@ -8,6 +8,7 @@
 #include <mutex>
 #include <vector>
 
+#include "debug_log.h"
 #include "ratebooster.hpp"
 #include "rom_images.hpp"
 #include "text_pipeline.hpp"
@@ -335,9 +336,15 @@ bool DectalkTtsEngine::ensure_machine()
         const std::wstring dll_path = resolve_core_dll();
         const std::wstring firmware_w = dectalk::utils::string_to_wstring(firmware_);
 
+        DECTALK_LOG("DectalkTtsEngine: ensure_machine voice=%s firmware=%s rom_dir=%s",
+                    voice_key_.c_str(), firmware_.c_str(),
+                    dectalk::utils::wstring_to_string(rom_dir).c_str());
+
         RomImages images = dtc01::load_rom_images(rom_dir, firmware_w);
         machine_ = dtc01::Machine::create(images.main, images.dsp, dll_path);
         if (!machine_) {
+            DECTALK_LOG("DectalkTtsEngine: ensure_machine failed to create the Machine "
+                        "(voice=%s firmware=%s)", voice_key_.c_str(), firmware_.c_str());
             return false;
         }
         // Never let the host hear the power-on "DECtalk, version ..." (§4.3 step 2).
@@ -345,6 +352,8 @@ bool DectalkTtsEngine::ensure_machine()
         return true;
     }
     catch (...) {
+        DECTALK_LOG("DectalkTtsEngine: ensure_machine threw while creating the Machine "
+                    "(voice=%s firmware=%s)", voice_key_.c_str(), firmware_.c_str());
         machine_.reset();
         return false;
     }
@@ -530,6 +539,10 @@ STDMETHODIMP DectalkTtsEngine::Speak(
                 fed += sanitized;
                 fed += dtc01::flush_suffix(sanitized);
 
+                DECTALK_LOG("DectalkTtsEngine: Speak voice=%s firmware=%s wpm=%d pitch=%d "
+                            "volume=%d fed=[%s]", voice_key_.c_str(), firmware_.c_str(), wpm,
+                            dvp.pitch, volume, fed.c_str());
+
                 machine_->set_volume(volume);
                 machine_->feed_text(fed);
 
@@ -646,6 +659,8 @@ STDMETHODIMP DectalkTtsEngine::Speak(
             }
         }
 
+        DECTALK_LOG("DectalkTtsEngine: Speak done, aborted=%d, %llu audio bytes written",
+                    aborted ? 1 : 0, static_cast<unsigned long long>(stream_bytes));
         return S_OK;
     }
     catch (const std::bad_alloc&) {

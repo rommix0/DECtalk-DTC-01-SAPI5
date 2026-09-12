@@ -4,6 +4,9 @@
 // for the reference behaviour this ports to C++.
 #include "dtc01_core.hpp"
 
+#include "debug_log.h"
+#include "utils.hpp"
+
 #include <windows.h>
 
 #include <algorithm>
@@ -18,13 +21,6 @@ std::mutex& exec_mutex() {
 
 namespace {
 
-// Logs to the debugger (DebugView, or Visual Studio's Output window) since
-// Task D1's shared debug_log isn't available yet. ASCII is enough for the
-// fixed strings this file emits.
-void debug_log(const std::string& msg) {
-    OutputDebugStringA((msg + "\r\n").c_str());
-}
-
 // Resolves one DLL export by name into a function-pointer member. Logs and
 // returns false (rather than throwing) on a miss so create() can fail
 // cleanly with nullptr, matching every other failure path here.
@@ -32,7 +28,7 @@ template <typename FnPtr>
 bool resolve(HMODULE mod, const char* name, FnPtr& out) {
     out = reinterpret_cast<FnPtr>(GetProcAddress(mod, name));
     if (!out) {
-        debug_log(std::string("dtc01_core: missing DLL export: ") + name);
+        DECTALK_LOG("dtc01_core: missing DLL export: %s (GetLastError=%lu)", name, GetLastError());
         return false;
     }
     return true;
@@ -60,9 +56,14 @@ constexpr int kSilenceThreshold = 120;
 std::unique_ptr<Machine> Machine::create(const std::vector<uint8_t>& main_img,
                                           const std::vector<uint16_t>& dsp_words,
                                           const std::wstring& dll_path) {
+    DECTALK_LOG("dtc01_core: Machine::create dll=%s main_bytes=%zu dsp_words=%zu",
+                dectalk::utils::wstring_to_string(dll_path).c_str(),
+                main_img.size(), dsp_words.size());
+
     HMODULE mod = LoadLibraryW(dll_path.c_str());
     if (!mod) {
-        debug_log("dtc01_core: LoadLibraryW failed for the emulator DLL");
+        DECTALK_LOG("dtc01_core: LoadLibraryW failed for the emulator DLL (GetLastError=%lu)",
+                    GetLastError());
         return nullptr;
     }
 
@@ -101,10 +102,13 @@ std::unique_ptr<Machine> Machine::create(const std::vector<uint8_t>& main_img,
     m->handle_ = m->fn_create_(m->main_img_.data(), static_cast<int>(m->main_img_.size()),
                                 m->dsp_words_.data(), static_cast<int>(m->dsp_words_.size()));
     if (!m->handle_) {
-        debug_log("dtc01_core: dtc01_create failed (bad ROM sizes or out of memory)");
+        DECTALK_LOG("dtc01_core: dtc01_create failed (bad ROM sizes or out of memory): "
+                    "main_bytes=%zu dsp_words=%zu",
+                    m->main_img_.size(), m->dsp_words_.size());
         return nullptr;  // ~Machine() frees module_ (== mod) exactly once
     }
 
+    DECTALK_LOG("dtc01_core: Machine::create succeeded");
     return m;
 }
 
@@ -151,6 +155,8 @@ void Machine::consume_boot_announcement() {
     //      the end.
     // Either phase can also end on a hard block ceiling so a firmware that
     // never settles can't hang the caller forever.
+    DECTALK_LOG("dtc01_core: consume_boot_announcement starting");
+
     bool heard = false;
     int quietBlocks = 0;
     int leadInBlocks = 0;
@@ -159,6 +165,8 @@ void Machine::consume_boot_announcement() {
     for (int block = 0; block < kBootMaxBlocks; ++block) {
         int got = run_block(buf, kBootChunkSamples);
         if (got <= 0) {
+            DECTALK_LOG("dtc01_core: consume_boot_announcement stalled at block %d (heard=%d)",
+                        block, heard ? 1 : 0);
             return;  // engine stalled / produced nothing further
         }
 
@@ -183,6 +191,8 @@ void Machine::consume_boot_announcement() {
         if (!heard) {
             ++leadInBlocks;
             if (leadInBlocks >= kBootGiveUpBlocks && is_idle()) {
+                DECTALK_LOG("dtc01_core: consume_boot_announcement gave up waiting for "
+                            "speech at block %d", block);
                 return;  // nothing to announce (or it never started) -- give up waiting
             }
             continue;
@@ -190,6 +200,8 @@ void Machine::consume_boot_announcement() {
 
         if (is_idle()) {
             if (++quietBlocks >= kBootSilenceBlocksNeeded) {
+                DECTALK_LOG("dtc01_core: consume_boot_announcement finished at block %d "
+                            "(sustained silence after speech)", block);
                 return;  // sustained silence after speech: announcement is over
             }
         } else {
@@ -197,6 +209,8 @@ void Machine::consume_boot_announcement() {
         }
     }
     // Hit the hard ceiling; stop regardless so a caller can never hang here.
+    DECTALK_LOG("dtc01_core: consume_boot_announcement hit the hard block ceiling (heard=%d)",
+                heard ? 1 : 0);
 }
 
 }  // namespace dtc01
