@@ -14,10 +14,9 @@
 namespace dtc01 {
 
 // Slider values 0..100; 50 means "this voice's own default", mirroring the
-// NVDA settings ring (__init__.py::_designVoiceCommand). -1 is reserved for
-// callers that want to mark a slider "unset" but is not treated specially
-// here -- dv_command scales every field of DvParams, always emitting all
-// nine DTC-01 parameters (see dv_command's comment below).
+// NVDA settings ring (__init__.py::_designVoiceCommand). A slider left at 50
+// is omitted from dv_command's output entirely -- see that function's
+// comment below.
 struct DvParams {
     int inflection = 50;       // -> pr (pitch range)
     int head_size = 50;        // -> hs
@@ -40,11 +39,19 @@ std::string rate_command(int wpm);
 // lookup lives in voices.hpp on the C++ side).
 std::string voice_command(const char* mnemonic);
 
-// "[:dv ap <v> pr <v> hs <v> br <v> ri <v> sm <v> g5 <v> la <v> as <v>]",
-// mirroring commands.py's design_voice_command() fed by scale_from_default()
-// for every one of DvParams' nine sliders (voice_key looked up in
-// VOICE_PARAM_DEFAULTS, falling back to "paul" if unknown, exactly like
-// commands.py's voice_param()). Always emits all nine tokens -- never "".
+// "[:dv ...]" for whichever of DvParams' nine sliders differ from 50 (this
+// voice's own default), scaled via scale_from_default() (voice_key looked
+// up in VOICE_PARAM_DEFAULTS, falling back to "paul" if unknown, exactly
+// like commands.py's voice_param()); returns "" if every slider is 50.
+//
+// This mirrors __init__.py::_designVoiceCommand exactly (`if sliderValue ==
+// 50: continue`, `if not params: return ""`), NOT commands.py's
+// design_voice_command() in isolation, which will happily emit a token for
+// whatever it's handed. Sending the full 9-token [:dv ...] prefix -- even
+// with every value equal to the voice's own default -- was measured to
+// break firmware synthesis outright (v2.0 truncates early, v1.8 runs to the
+// line-length cap and never ends), so omitting default-valued params is not
+// an optimization here, it's required for correct playback.
 std::string dv_command(const std::string& voice_key, const DvParams& p);
 
 // Square brackets are dropped (space-replaced, since the firmware ignores

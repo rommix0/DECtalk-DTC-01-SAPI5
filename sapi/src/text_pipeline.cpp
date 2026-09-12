@@ -131,13 +131,18 @@ std::string voice_command(const char* mnemonic) {
 }
 
 std::string dv_command(const std::string& voice_key, const DvParams& p) {
+    // Mirrors __init__.py::_designVoiceCommand exactly: a slider left at 50
+    // (this voice's own default) is skipped entirely -- `if sliderValue ==
+    // 50: continue` -- and if nothing differs, no [:dv ...] is sent at all
+    // -- `if not params: return ""`. Measured against the real firmware:
+    // sending the full 9-token form (even with every value at the voice's
+    // own default) breaks synthesis outright, so this is not merely a
+    // shorter-prefix optimization.
+    //
     // Order matches commands.py's design_voice_command() as driven by
     // __init__.py::_designVoiceCommand's own iteration order: ap, pr, hs,
     // br, ri, sm, g5, then laryngealization/assertiveness (la, as), which
     // that driver method doesn't currently expose but DV_PARAMS supports.
-    // Unlike that driver method (which skips sliders left at 50), this
-    // always scales and emits all nine -- DvParams has no "unset" sentinel
-    // to skip on, so every field always carries a concrete value.
     struct Token { const char* abbr; int slider; };
     const Token tokens[] = {
         {"ap", p.pitch},
@@ -150,8 +155,9 @@ std::string dv_command(const std::string& voice_key, const DvParams& p) {
         {"la", p.laryngealization},
         {"as", p.assertiveness},
     };
-    std::string out = "[:dv";
+    std::string out;
     for (const auto& t : tokens) {
+        if (t.slider == 50) continue;  // this voice's own default: omit
         int scaled = scale_from_default(voice_key, t.abbr, t.slider);
         int value = clamp(t.abbr, scaled);
         out += " ";
@@ -159,8 +165,8 @@ std::string dv_command(const std::string& voice_key, const DvParams& p) {
         out += " ";
         out += std::to_string(value);
     }
-    out += "]";
-    return out;
+    if (out.empty()) return "";
+    return "[:dv" + out + "]";
 }
 
 std::string sanitize_text(const std::string& utf8) {
