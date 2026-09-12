@@ -37,6 +37,12 @@ add_dtc_tool(test_tokens advapi32)
 add_dtc_tool(test_outputformat sapi ole32 oleaut32 advapi32)
 add_dtc_tool(test_exports)
 
+# sapi_probe drives the real DectalkDtc01SAPI.dll coclass end-to-end through
+# DllGetClassObject (no registration); it links dtc01common like every other
+# tool here but doesn't use any of its symbols -- it builds its own in-memory
+# ISpObjectToken stand-in and WAV writer (see tools/sapi_probe.cpp).
+add_dtc_tool(sapi_probe sapi ole32 oleaut32 advapi32)
+
 # The in-proc COM server: DectalkTtsEngine.cpp and com.cpp already live in
 # dtc01common (linked below), so the DLL target itself is just the four
 # exported entry points in sapi_main.cpp plus the .def that exports them --
