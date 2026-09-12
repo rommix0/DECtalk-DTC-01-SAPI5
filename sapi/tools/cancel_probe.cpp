@@ -455,8 +455,130 @@ int wmain(int argc, wchar_t** argv)
         }
     }
 
-    wprintf(L"cancel_probe: PASS | FULL=%llu bytes | %d rounds | %d aborted | %d recovery checks\n",
-            static_cast<unsigned long long>(FULL), kRounds, aborted_count, recovery_count);
+    // --- multi-fragment fragment-boundary abort case -----------------------
+    // Everything above uses a single SPVTEXTFRAG per Speak() call, so every
+    // real abort fires inside the audio-pump loop; the *other* abort check in
+    // Speak() -- at the top of the per-fragment for-loop, evaluated when
+    // advancing from one fragment to the next -- is never exercised. That
+    // path is exactly where the fragment-boundary `aborted = true` fix
+    // (DectalkTtsEngine.cpp, ~line 457) matters: without it, an abort that
+    // lands between fragments (after an earlier fragment already fed real
+    // speech to the persistent machine_) would skip the reset-and-recover
+    // cleanup entirely. Build a two-fragment chain and land the abort right
+    // on that boundary.
+    //
+    // Reasoning for why threshold == F1 (frag 1's own standalone byte total)
+    // lands the abort *exactly* on the boundary rather than mid-pump: a
+    // never-aborting site's fragment ends via the pump's bottom-of-loop
+    // idle_runs check, never via a GetActions() abort check -- so the engine
+    // never queries GetActions() again after the write that brings the
+    // running total to F1. The *next* time GetActions() is queried is the
+    // top-of-for-loop check for fragment 2, which is therefore the first
+    // point where "bytes_ >= F1" can be observed. If that reasoning holds,
+    // the aborted two-fragment call's byte count should come out exactly F1
+    // (not a single fragment-2 block more) -- checked below.
+    const std::wstring frag1_text = L"First fragment of speech.";
+    const std::wstring frag2_text = L"Second fragment here.";
+
+    SPVTEXTFRAG frag1_only = frag;
+    frag1_only.pTextStart = frag1_text.c_str();
+    frag1_only.ulTextLen = static_cast<ULONG>(frag1_text.size());
+    frag1_only.ulTextSrcOffset = 0;
+
+    SPVTEXTFRAG frag2b = frag;
+    frag2b.pNext = nullptr;
+    frag2b.pTextStart = frag2_text.c_str();
+    frag2b.ulTextLen = static_cast<ULONG>(frag2_text.size());
+    frag2b.ulTextSrcOffset = static_cast<ULONG>(frag1_text.size()) + 1;
+
+    SPVTEXTFRAG frag1b = frag;
+    frag1b.pNext = &frag2b;
+    frag1b.pTextStart = frag1_text.c_str();
+    frag1b.ulTextLen = static_cast<ULONG>(frag1_text.size());
+    frag1b.ulTextSrcOffset = 0;
+
+    // Measure fragment 1 standalone (to pick the boundary threshold) and the
+    // full two-fragment render (to know what "not truncated" would be).
+    ULONGLONG F1 = 0;
+    {
+        auto* site = new AbortingSite(kNeverAbort);
+        hr = speak_with_watchdog(engine, &frag1_only, site, wfx, kRounds + 1, kWatchdogMs);
+        F1 = site->bytes();
+        wprintf(L"boundary-setup: frag1-only Speak -> 0x%08X | %llu bytes\n", hr,
+                static_cast<unsigned long long>(F1));
+        site->Release();
+        if (FAILED(hr)) fail(kRounds + 1, "frag1-only measurement Speak failed");
+        if (F1 == 0) fail(kRounds + 1, "frag1-only measurement produced no audio");
+    }
+
+    ULONGLONG TWO_FRAG_FULL = 0;
+    {
+        auto* site = new AbortingSite(kNeverAbort);
+        hr = speak_with_watchdog(engine, &frag1b, site, wfx, kRounds + 2, kWatchdogMs);
+        TWO_FRAG_FULL = site->bytes();
+        wprintf(L"boundary-setup: two-fragment full Speak -> 0x%08X | %llu bytes\n", hr,
+                static_cast<unsigned long long>(TWO_FRAG_FULL));
+        site->Release();
+        if (FAILED(hr)) fail(kRounds + 2, "two-fragment full measurement Speak failed");
+        if (TWO_FRAG_FULL <= F1) {
+            fail(kRounds + 2, "two-fragment full render was not longer than fragment 1 alone");
+        }
+    }
+
+    // The actual boundary-abort case: threshold == F1 exactly.
+    bool hit_boundary = false;
+    {
+        auto* site = new AbortingSite(F1);
+        hr = speak_with_watchdog(engine, &frag1b, site, wfx, kRounds + 3, kWatchdogMs);
+        const ULONGLONG bytes = site->bytes();
+        site->Release();
+
+        // Exact equality means the abort was seen for the first time at the
+        // top-of-for-loop check for fragment 2, with zero fragment-2 bytes
+        // written -- i.e. precisely the fragment-boundary path. A tolerance
+        // of one block (2000 bytes = kBlockSamples*sizeof(int16_t) in
+        // DectalkTtsEngine.cpp) still counts as "the boundary" in case of
+        // any timing slack; anything beyond that means at least one block of
+        // fragment 2 was produced before the abort landed.
+        hit_boundary = (bytes >= F1) && (bytes <= F1 + 2000);
+        wprintf(L"boundary: F1=%llu TWO_FRAG_FULL=%llu bytes=%llu hr=0x%08X hit_boundary=%hs\n",
+                static_cast<unsigned long long>(F1), static_cast<unsigned long long>(TWO_FRAG_FULL),
+                static_cast<unsigned long long>(bytes), hr, hit_boundary ? "yes" : "no");
+        fflush(stdout);
+
+        if (FAILED(hr)) fail(kRounds + 3, "multi-fragment boundary-abort Speak failed");
+        if (bytes == 0) fail(kRounds + 3, "multi-fragment boundary-abort utterance produced no audio");
+        if (bytes >= TWO_FRAG_FULL) {
+            fail(kRounds + 3, "multi-fragment boundary-abort utterance was not actually truncated");
+        }
+        // hit_boundary is diagnostic, not a hard requirement: if it lands
+        // slightly early (still inside fragment 1's own pump) that's still a
+        // meaningful abort/recovery case, just not the exact boundary path.
+        // It is logged above either way; see the report for which happened.
+    }
+
+    // The point of this whole case: prove the fragment-boundary `aborted =
+    // true` fix (DectalkTtsEngine.cpp) means a boundary-landing abort still
+    // gets the reset-and-recover cleanup, exactly like a mid-pump abort does
+    // -- so the *next* clean utterance is still full-length.
+    {
+        auto* site = new AbortingSite(kNeverAbort);
+        hr = speak_with_watchdog(engine, &frag, site, wfx, kRounds + 4, kWatchdogMs);
+        const ULONGLONG bytes = site->bytes();
+        wprintf(L"boundary-recovery: Speak -> 0x%08X | %llu bytes\n", hr,
+                static_cast<unsigned long long>(bytes));
+        site->Release();
+        if (FAILED(hr)) fail(kRounds + 4, "post-boundary-abort recovery Speak failed");
+        if (bytes < lower_bound || bytes > upper_bound) {
+            fail(kRounds + 4, "post-boundary-abort recovery utterance was not full-length "
+                              "(fragment-boundary abort left residual state behind)");
+        }
+    }
+
+    wprintf(L"cancel_probe: PASS | FULL=%llu bytes | %d rounds | %d aborted | %d recovery checks | "
+            L"fragment-boundary case hit_boundary=%hs\n",
+            static_cast<unsigned long long>(FULL), kRounds, aborted_count, recovery_count,
+            hit_boundary ? "yes" : "no");
 
     CoTaskMemFree(wfx);
     token->Release();
