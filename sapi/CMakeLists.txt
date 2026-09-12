@@ -70,3 +70,13 @@ set_target_properties(DectalkDtc01SAPI PROPERTIES
 # the task brief calls them out explicitly as this target's own needs).
 add_executable(DectalkConfig WIN32 tools/dectalk_config.cpp tools/dectalk_config.rc)
 target_link_libraries(DectalkConfig PRIVATE dtc01common user32 comctl32 advapi32 ole32 oleaut32 sapi)
+
+# DectalkDiagnostics (Task D2): drives the real DectalkDtc01SAPI.dll through
+# DllGetClassObject for all 18 voice tokens and reports pass/fail -- an
+# install-time smoke test. Links dtc01common for dtc01::VOICES (voices.hpp);
+# not add_dtc_tool because its output name must be exactly
+# DectalkDiagnostics.exe (add_dtc_tool infers the name from tools/<name>.cpp,
+# which would give dectalk_diag.exe here).
+add_executable(DectalkDiagnostics tools/dectalk_diag.cpp)
+target_link_libraries(DectalkDiagnostics PRIVATE dtc01common sapi ole32 oleaut32 advapi32)
+target_compile_options(DectalkDiagnostics PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/UNDEBUG>)
