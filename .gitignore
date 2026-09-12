@@ -66,3 +66,8 @@ __pycache__/
 
 # Local Claude Code tool permissions -- not project material
 .claude/
+
+# CMake build trees for the SAPI subproject
+sapi/build_x64/
+sapi/build_x86/
+sapi/output/
