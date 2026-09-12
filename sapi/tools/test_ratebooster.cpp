@@ -75,6 +75,37 @@ int wmain() {
     assert(outRms > inRms * 0.5 && outRms < inRms * 1.5);  // energy roughly preserved, not silent.
     assert(std::fabs(outFreq - kToneHz) < 20.0);            // pitch preserved (within 10%).
 
+    // Edge case: empty input must return empty output, no crash.
+    std::vector<int16_t> emptyOut = dtc01::time_compress({}, 2.0);
+    assert(emptyOut.empty());
+    printf("empty input: %zu samples out (no crash)\n", emptyOut.size());
+
+    // Edge case: input shorter than one analysis frame (kFrameSamples == 200
+    // in ratebooster.cpp) takes the early passthrough branch. Asserting
+    // exact equality, not just "no crash" -- that's the documented
+    // behavior in ratebooster.hpp ("too short to frame meaningfully").
+    std::vector<int16_t> shortIn = makeSine(50, kToneHz, kAmplitude);  // 50 < 200
+    std::vector<int16_t> shortOut = dtc01::time_compress(shortIn, 2.0);
+    assert(shortOut == shortIn);
+    printf("short input (50 samples < frame): exact passthrough (%zu samples)\n", shortOut.size());
+
+    // Edge case: non-integer factor. 10000 / 1.5 = 6666.67.
+    std::vector<int16_t> compressed15 = dtc01::time_compress(tone, 1.5);
+    double outRms15 = rms(compressed15);
+    printf("factor=1.5: %zu samples, rms=%.1f\n", compressed15.size(), outRms15);
+    double expectedLen15 = kInputSamples / 1.5;
+    double lenRatio15 = compressed15.size() / expectedLen15;
+    assert(lenRatio15 > 0.95 && lenRatio15 < 1.05);  // within +/-5% of ~6667 samples.
+    assert(outRms15 > inRms * 0.5 && outRms15 < inRms * 1.5);  // not silent.
+
+    // Edge case: factor <= 0 must be treated as passthrough (no
+    // div-by-zero, no crash) -- same clamp-up-to-1.0 path as factor < 1.0.
+    std::vector<int16_t> zeroFactorOut = dtc01::time_compress(tone, 0.0);
+    assert(zeroFactorOut == tone);
+    std::vector<int16_t> negFactorOut = dtc01::time_compress(tone, -1.0);
+    assert(negFactorOut == tone);
+    printf("factor<=0 (0.0, -1.0): exact passthrough, no crash\n");
+
     printf("all assertions passed\n");
     return 0;
 }
