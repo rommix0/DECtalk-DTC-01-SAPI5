@@ -12,9 +12,12 @@
 // Written to %LOCALAPPDATA%\DECtalkDTC01\dectalk-sapi.log, which is writable
 // without elevation -- the install directory is not, and a SAPI engine runs
 // inside whatever application is speaking. Every line carries the process
-// name, its bitness and its pid, because a single utterance from a 64-bit
-// host crosses two processes (the host and the 32-bit worker), both of which
-// append to the same file.
+// name, its bitness and its pid, because this log is shared across process
+// boundaries in a different way than a single-process log would be: multiple
+// independent SAPI host processes (e.g. a screen reader and a media player
+// both speaking at once), and the 32-bit and 64-bit builds of this engine
+// running in different hosts, can all append to the same per-user file
+// concurrently.
 //
 // Turn it off without reinstalling by creating this registry value:
 //   HKCU\Software\DECtalkDTC01  DWORD  Logging = 0
@@ -141,9 +144,10 @@ inline void Rotate(const wchar_t* path)
 //
 // The share mode matters more than it looks: _wfopen_s opens a file for
 // EXCLUSIVE access, so the first process to log would lock every other one
-// out for as long as it ran -- and since a screen reader host and the 32-bit
-// worker are both long-lived, whichever started first would silently steal
-// the log from everyone else. _wfsopen with _SH_DENYNO lets them all append.
+// out for as long as it ran -- and since multiple SAPI host processes (and
+// the 32-bit and 64-bit engines running inside different hosts) are all
+// potentially long-lived, whichever started first would silently steal the
+// log from everyone else. _wfsopen with _SH_DENYNO lets them all append.
 // The open is also retried rather than latched, so a process that starts
 // while the file is briefly unavailable still ends up logging.
 inline FILE* Handle()
@@ -177,9 +181,10 @@ inline void Log(const char* format, ...)
         return;
     }
 
-    // The whole line is composed first and written once: the SAPI engine and
-    // the 32-bit worker both append to this file, and a single write per line
-    // keeps their output from interleaving mid-line.
+    // The whole line is composed first and written once: multiple SAPI host
+    // processes (and the 32-bit and 64-bit engines running in different
+    // hosts) can all append to this file at once, and a single write per
+    // line keeps their output from interleaving mid-line.
     char line[2048];
     SYSTEMTIME now;
     GetLocalTime(&now);

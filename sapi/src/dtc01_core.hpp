@@ -25,6 +25,17 @@ namespace dtc01 {
 // run_block) can do that under one lock/unlock pair instead of paying for
 // it per call. A function-local static keeps this a single instance no
 // matter how many translation units call it.
+//
+// Guard rail for future tool authors: this mutex lives in the static
+// dtc01common lib, but the emulator's 68000 state lives in the single native
+// dtc01_*.dll (one HMODULE, i.e. one set of process globals, per process).
+// A process must therefore drive that native core through EXACTLY ONE path
+// -- either the SAPI DLL's own exports, or a second copy of dtc01common
+// linked directly into a standalone tool, but never both in the same
+// process at once. Two independent copies of dtc01common (and so two
+// independent exec_mutex() instances) would not serialize against each
+// other, and Musashi's global state would corrupt (0xC00000FF) under
+// concurrent access.
 std::mutex& exec_mutex();
 
 // RAII wrapper around one dtc01_*.dll machine handle. Every method

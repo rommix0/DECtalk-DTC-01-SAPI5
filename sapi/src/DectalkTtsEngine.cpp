@@ -253,20 +253,22 @@ STDMETHODIMP DectalkTtsEngine::SetObjectToken(ISpObjectToken* pToken)
 
         // A token change invalidates any Machine built for the previous voice's
         // firmware; drop it so ensure_machine() rebuilds under the new ROMs.
-        // Test machine_ INSIDE the lock (ThreadingModel=Both: a concurrent
-        // Speak() on another thread may be mutating it).
+        // The member publication below (voice_key_/firmware_/mnemonic_/
+        // voice_resolved_/token_) is done in this SAME guarded region: Speak()
+        // reads all of these under exec_mutex(), so publishing them outside
+        // the lock would let a concurrent Speak() (ThreadingModel=Both) observe
+        // a torn mix of old and new values.
         {
             std::lock_guard<std::mutex> lk(dtc01::exec_mutex());
             if (machine_) {
                 machine_.reset();
             }
+            voice_key_ = voice_key;
+            firmware_  = firmware;
+            mnemonic_  = voice->mnemonic;
+            voice_resolved_ = true;
+            token_ = pToken;
         }
-
-        voice_key_ = voice_key;
-        firmware_  = firmware;
-        mnemonic_  = voice->mnemonic;
-        voice_resolved_ = true;
-        token_ = pToken;
         return S_OK;
     }
     catch (const std::bad_alloc&) {
@@ -500,6 +502,7 @@ STDMETHODIMP DectalkTtsEngine::Speak(
                     if (FAILED(pOutputSite->Write(zeros.data(),
                                                   static_cast<ULONG>(chunk * sizeof(int16_t)),
                                                   &written))) {
+                        aborted = true;
                         break;
                     }
                     stream_bytes += written;
@@ -600,6 +603,12 @@ STDMETHODIMP DectalkTtsEngine::Speak(
                             const HRESULT hr = pOutputSite->Write(
                                 buf, static_cast<ULONG>(got * sizeof(int16_t)), &written);
                             if (FAILED(hr)) {
+                                // A failed Write is treated exactly like SPVES_ABORT: this
+                                // fragment already fed real speech to machine_ (see the
+                                // SPVES_ABORT comment above the fragment loop), and without
+                                // the post-loop reset below that residual queued speech would
+                                // survive into and bleed into the next Speak() call.
+                                aborted = true;
                                 break;
                             }
                             stream_bytes += written;
@@ -654,6 +663,7 @@ STDMETHODIMP DectalkTtsEngine::Speak(
                             compressed.data() + offset,
                             static_cast<ULONG>(chunk * sizeof(int16_t)), &written);
                         if (FAILED(hr)) {
+                            aborted = true;
                             break;
                         }
                         stream_bytes += written;
