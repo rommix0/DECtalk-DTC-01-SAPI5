@@ -157,9 +157,15 @@ def _params(**overrides) -> dict[str, int]:
 
 
 PARAM_SETS: list[tuple[str, dict[str, int]]] = [("all_50", _params())]
-# One non-50 param at a time, for every one of the 9 sliders (incl. la/as).
+# One non-50 param at a time, for every one of the 9 sliders (incl. la/as),
+# BOTH below 50 and above 50 -- scale_from_default() takes a different
+# branch on each side (below 50 interpolates towards the voice's own `lo`,
+# above 50 towards its own `hi`), so a slider only ever tested on one side
+# would leave that param's `hi` (or `lo`) bound unverified for every voice
+# in the cross. This is what closes that coverage gap.
 for _field in _BASE_PARAMS:
-    PARAM_SETS.append((f"only_{_field}_30", _params(**{_field: 30})))
+    PARAM_SETS.append((f"only_{_field}_25", _params(**{_field: 25})))
+    PARAM_SETS.append((f"only_{_field}_75", _params(**{_field: 75})))
 # Extremes (0 and 100) on a couple of params.
 PARAM_SETS.append(("head_size_0", _params(head_size=0)))
 PARAM_SETS.append(("head_size_100", _params(head_size=100)))
@@ -179,6 +185,10 @@ TEXTS: list[tuple[str, str]] = [
     ("no_punct", "no ending punctuation"),
     ("trailing_space", "trailing space "),
     ("empty", ""),
+    # Exercises the \n -> \\n and \r -> \\r escaping on the SANITIZE field
+    # symmetrically -- previously only FLUSH's trailing "\r" hit that path.
+    ("embedded_newline", "line one\nline two"),
+    ("embedded_cr", "line one\rline two"),
 ]
 
 
