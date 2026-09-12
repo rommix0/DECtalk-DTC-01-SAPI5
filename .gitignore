@@ -1,42 +1,4 @@
 # ---------------------------------------------------------------------------
-# Copyrighted firmware -- MUST NEVER BE COMMITTED (see DESIGN.md §0)
-#
-# The DTC-01 main-CPU and DSP ROMs are Digital Equipment Corp / Fonix
-# firmware. Users supply their own dump. tools/check_no_roms.py enforces
-# this by content hash; it is not left to these patterns alone.
-# ---------------------------------------------------------------------------
-roms_extracted/
-dectalk.zip
-*.e1
-*.e2
-*.e3
-*.e4
-*.e5
-*.e6
-*.e7
-*.e8
-*.e15
-*.e16
-*.e17
-*.e18
-*.e19
-*.e20
-*.e21
-*.e22
-*.e69
-*.e70
-
-# Assembled ROM images and anything derived from them
-build/maincpu.bin
-build/dsp.bin
-*.rom
-
-# The OCR'd DTC-01 Owner's Manual is DEC copyright, and the MAME/Musashi
-# reference copies belong to their own projects -- DESIGN.md cites where to
-# obtain each. Keep the local working copies out of the repo.
-research/
-
-# ---------------------------------------------------------------------------
 # Build output
 # ---------------------------------------------------------------------------
 build/
@@ -67,7 +29,7 @@ __pycache__/
 # Local Claude Code tool permissions -- not project material
 .claude/
 
-# CMake build trees for the SAPI subproject
+# CMake build trees for the SAPI project
 sapi/build_x64/
 sapi/build_x86/
 sapi/output/
