@@ -24,3 +24,6 @@ target_link_libraries(test_voices PRIVATE dtc01common)
 
 add_executable(test_pipeline tools/test_pipeline.cpp)
 target_link_libraries(test_pipeline PRIVATE dtc01common)
+
+add_executable(dtc01_speak tools/dtc01_speak.cpp)
+target_link_libraries(dtc01_speak PRIVATE dtc01common)
