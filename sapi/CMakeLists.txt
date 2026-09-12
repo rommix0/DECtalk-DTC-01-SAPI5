@@ -11,3 +11,7 @@ add_library(dtc01common STATIC
   src/text_pipeline.cpp
   src/dtc01_core.cpp)
 target_include_directories(dtc01common PUBLIC src)
+target_link_libraries(dtc01common PUBLIC bcrypt)
+
+add_executable(test_rom_images tools/test_rom_images.cpp)
+target_link_libraries(test_rom_images PRIVATE dtc01common bcrypt)
