@@ -88,8 +88,7 @@ std::unique_ptr<Machine> Machine::create(const std::vector<uint8_t>& main_img,
     ok &= resolve(mod, "dtc01_unmapped_accesses", m->fn_unmapped_accesses_);
     ok &= resolve(mod, "dtc01_read_ram32", m->fn_read_ram32_);
     if (!ok) {
-        FreeLibrary(mod);
-        return nullptr;
+        return nullptr;  // ~Machine() frees module_ (== mod) exactly once
     }
 
     // Keep our own copies alive for the Machine's lifetime -- see the
@@ -103,8 +102,7 @@ std::unique_ptr<Machine> Machine::create(const std::vector<uint8_t>& main_img,
                                 m->dsp_words_.data(), static_cast<int>(m->dsp_words_.size()));
     if (!m->handle_) {
         debug_log("dtc01_core: dtc01_create failed (bad ROM sizes or out of memory)");
-        FreeLibrary(mod);
-        return nullptr;
+        return nullptr;  // ~Machine() frees module_ (== mod) exactly once
     }
 
     return m;
