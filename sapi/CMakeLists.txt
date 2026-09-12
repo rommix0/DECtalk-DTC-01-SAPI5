@@ -35,3 +35,15 @@ add_dtc_tool(test_pipeline)
 add_dtc_tool(dtc01_speak)
 add_dtc_tool(test_tokens advapi32)
 add_dtc_tool(test_outputformat sapi ole32 oleaut32 advapi32)
+add_dtc_tool(test_exports)
+
+# The in-proc COM server: DectalkTtsEngine.cpp and com.cpp already live in
+# dtc01common (linked below), so the DLL target itself is just the four
+# exported entry points in sapi_main.cpp plus the .def that exports them --
+# nothing here is compiled a second time, avoiding duplicate-symbol errors
+# against dtc01common or the test targets above that also link it.
+add_library(DectalkDtc01SAPI SHARED src/sapi_main.cpp)
+target_link_libraries(DectalkDtc01SAPI PRIVATE dtc01common)
+set_target_properties(DectalkDtc01SAPI PROPERTIES
+  OUTPUT_NAME "DectalkDtc01SAPI"
+  LINK_FLAGS "/DEF:${CMAKE_CURRENT_SOURCE_DIR}/src/dectalk_sapi.def")
