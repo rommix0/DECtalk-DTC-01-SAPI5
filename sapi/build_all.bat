@@ -33,7 +33,7 @@ set "ROOT=%SAPI_DIR%\.."
 set "BUILD_DIR_X86=%SAPI_DIR%\build_x86"
 set "BUILD_DIR_X64=%SAPI_DIR%\build_x64"
 set "OUTPUT_DIR=%SAPI_DIR%\output"
-set "ROMS_ROOT=E:\Text-to-Speech Repo\TTS Hosts\DECTalk\Software\DECTalk Drivers\DECTalk DTC-01\ROMs"
+set "ROMS_ROOT=%ROOT%\ROMs"
 
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 if not exist "%VSWHERE%" (
@@ -68,13 +68,17 @@ if errorlevel 1 (
 )
 echo.
 
+rem @rommix0 fixed missing -G flag
+rem an oversight by Claude since Claude Code is more Linux-friendly
 echo === Building SAPI project: x86 ===
-cmake -A Win32 -S "%SAPI_DIR%" -B "%BUILD_DIR_X86%" || exit /b 1
+cmake -G "Visual Studio 17 2022" -A Win32 -S "%SAPI_DIR%" -B "%BUILD_DIR_X86%" || exit /b 1
 cmake --build "%BUILD_DIR_X86%" --config Release || exit /b 1
 echo.
 
+rem @rommix0 fixed missing -G flag
+rem an oversight by Claude since Claude Code is more Linux-friendly
 echo === Building SAPI project: x64 ===
-cmake -A x64 -S "%SAPI_DIR%" -B "%BUILD_DIR_X64%" || exit /b 1
+cmake -G "Visual Studio 17 2022" -A x64 -S "%SAPI_DIR%" -B "%BUILD_DIR_X64%" || exit /b 1
 cmake --build "%BUILD_DIR_X64%" --config Release || exit /b 1
 echo.
 
