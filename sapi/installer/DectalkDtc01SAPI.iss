@@ -118,9 +118,12 @@ Name: "{autodesktop}\DECtalk configuration"; Filename: "{app}\DectalkConfig.exe"
 
 [UninstallDelete]
 ; Written from [Code] rather than copied, so the uninstaller is told about it
-; by hand. The roms dirs are installer-copied too (Inno would remove the
-; files it placed on its own), but being explicit here keeps a second-run
-; firmware change from ever leaving a stray roms\ directory behind.
+; by hand. This only fires on a full uninstall -- it does NOT run on a
+; reconfiguring re-install (ticking a different set of firmwares and running
+; the installer again), which is why CurStepChanged's ssInstall handler below
+; separately wipes {app}\roms / {app}\x64\roms itself before [Files] recopies
+; them: without that, [Files] only ever ADDS files, so an unticked firmware's
+; ROMs would survive a re-run and available_versions() would still find them.
 Type: files; Name: "{app}\voices.ini"
 Type: filesandordirs; Name: "{app}\roms"
 Type: filesandordirs; Name: "{app}\x64\roms"
@@ -184,9 +187,11 @@ begin
            'This does not affect which voices are registered.', mbInformation, MB_OK);
 end;
 
-// v20 -> 10 voices, v18 -> 8 voices, both -> 18 -- kept in step with
-// sapi/src/voices.hpp's VOICES table by hand (10 v20 + 8 v18, v18 excludes
-// Doctor Dennis and Whispery Wendy).
+// Cosmetic count for the Ready-page memo only -- actual registration is
+// always decided by ROM presence (DllRegisterServer), never by this. v20 ->
+// 10 voices, v18 -> 8 voices, both -> 18. MUST be kept in step BY HAND with
+// sapi/src/voices.hpp's VOICES table (10 v20 + 8 v18, v18 excludes Doctor
+// Dennis and Whispery Wendy) -- there is no automatic link between the two.
 function PickedVoiceCount(): Integer;
 begin
   Result := 0;
@@ -231,6 +236,22 @@ var
 begin
   if CurStep = ssInstall then
   begin
+    // ssInstall fires BEFORE [Files] copies anything, so this is the one
+    // place a stale ROM set can be cleared before the new one lands.
+    // [Files] only ever ADDS files -- it never removes what a component
+    // copied on a previous run -- so without this, unticking firmware\v18
+    // on a re-install would leave its .rom files sitting in {app}\roms
+    // (and {app}\x64\roms). dtc01::available_versions() would then still
+    // find a complete v18 set, and DllRegisterServer would re-register all
+    // 18 voices even though the wizard (and voices.ini) say v20-only --
+    // the selection and the registered voices would silently drift apart.
+    // DelTree(..., True, True, True) removes the directory, its files, and
+    // its subdirs, and is a documented no-op if the path doesn't exist (a
+    // fresh install has no {app}\roms yet), so this is safe on every run:
+    // fresh install, upgrade with the same firmware, or a firmware change.
+    DelTree(ExpandConstant('{app}\roms'), True, True, True);
+    DelTree(ExpandConstant('{app}\x64\roms'), True, True, True);
+
     // Drop any previous registration first so a firmware unticked on this
     // run -- or a rename/removal of a voice between versions -- cannot leave
     // an orphaned token pointing at this engine. There is no worker process

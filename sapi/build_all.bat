@@ -136,7 +136,7 @@ if exist "%OUTPUT_DIR%\x64\DectalkDiagnostics.exe"  echo   x64\DectalkDiagnostic
 rem ROM counts were already printed live by :stage_roms during the "Staging
 rem ROMs" step above (see its comment for why the count isn't re-reported
 rem here via a separate call).
-if exist "%OUTPUT_DIR%\DectalkDtc01SAPI_Setup.exe"  echo   DectalkDtc01SAPI_Setup.exe (installer)
+if exist "%OUTPUT_DIR%\DectalkDtc01_SAPI_Setup.exe" echo   DectalkDtc01_SAPI_Setup.exe (installer)
 endlocal
 exit /b 0
 
