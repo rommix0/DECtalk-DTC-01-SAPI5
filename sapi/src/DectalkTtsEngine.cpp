@@ -212,9 +212,11 @@ DectalkTtsEngine::DectalkTtsEngine() = default;
 DectalkTtsEngine::~DectalkTtsEngine()
 {
     // The Machine touches the shared 68000 core on destruction, so tear it down
-    // under the same process-wide lock every other Machine call holds.
+    // under the same process-wide lock every other Machine call holds. Test
+    // machine_ INSIDE the lock: with ThreadingModel=Both the host may race this
+    // against an in-flight Speak() mutating machine_ on another thread.
+    std::lock_guard<std::mutex> lk(dtc01::exec_mutex());
     if (machine_) {
-        std::lock_guard<std::mutex> lk(dtc01::exec_mutex());
         machine_.reset();
     }
 }
@@ -248,9 +250,13 @@ STDMETHODIMP DectalkTtsEngine::SetObjectToken(ISpObjectToken* pToken)
 
         // A token change invalidates any Machine built for the previous voice's
         // firmware; drop it so ensure_machine() rebuilds under the new ROMs.
-        if (machine_) {
+        // Test machine_ INSIDE the lock (ThreadingModel=Both: a concurrent
+        // Speak() on another thread may be mutating it).
+        {
             std::lock_guard<std::mutex> lk(dtc01::exec_mutex());
-            machine_.reset();
+            if (machine_) {
+                machine_.reset();
+            }
         }
 
         voice_key_ = voice_key;
