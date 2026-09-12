@@ -489,6 +489,14 @@ STDMETHODIMP DectalkTtsEngine::Speak(
                 long produced = 0;
                 int idle_runs = 0;
                 int zero_runs = 0;
+                // v1.8 has a longer letter-to-sound lead-in during which the
+                // FIFOs briefly drain (is_idle() true) before any real audio is
+                // produced; ending on idle then truncates the utterance. Only
+                // let idle end the fragment once speech has actually been heard
+                // -- a block with a peak above the parked-DAC level and not flat
+                // (mirrors __init__.py's "silence only counts as finished once
+                // we've heard speech" guard + native.py is_flat/peak).
+                bool speech_started = false;
                 while (produced < kFragCapSamples) {
                     const DWORD a = pOutputSite->GetActions();
                     if (a & SPVES_ABORT) { aborted = true; break; }
@@ -511,11 +519,27 @@ STDMETHODIMP DectalkTtsEngine::Speak(
                         stream_bytes += written;
                         produced += got;
                         zero_runs = 0;
+
+                        if (!speech_started) {
+                            int16_t lo = buf[0], hi = buf[0];
+                            int peak = 0;
+                            for (int s = 0; s < got; ++s) {
+                                const int16_t v = buf[s];
+                                if (v < lo) lo = v;
+                                if (v > hi) hi = v;
+                                const int a2 = std::abs(static_cast<int>(v));
+                                if (a2 > peak) peak = a2;
+                            }
+                            const bool flat = (lo == hi);
+                            if (peak > 256 && !flat) {
+                                speech_started = true;
+                            }
+                        }
                     } else if (++zero_runs > 50) {
-                        break;  // stalled without going idle; give up on this fragment
+                        break;  // stalled without producing speech; give up on this fragment
                     }
 
-                    if (machine_->is_idle() && produced > 0) {
+                    if (speech_started && machine_->is_idle()) {
                         if (++idle_runs > 3) {
                             break;
                         }
