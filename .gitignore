@@ -4,11 +4,6 @@
 build/
 !build/.gitkeep
 
-# Musashi's generated opcode tables are reproduced by tools/build_native.bat
-# (m68kmake must be built /Od -- see native/musashi/VENDORING.md).
-native/musashi/m68kops.c
-native/musashi/m68kops.h
-native/musashi/m68kmake.exe
 *.obj
 *.pdb
 *.ilk
@@ -33,3 +28,6 @@ __pycache__/
 sapi/build_x64/
 sapi/build_x86/
 sapi/output/
+
+# prompt for making this awesome project (thank you Josh)
+prompt_for_dtc01_sapi.txt
