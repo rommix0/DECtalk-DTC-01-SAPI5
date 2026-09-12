@@ -1,24 +1,15 @@
-# DECtalk DTC-01 → NVDA Synth Driver: Design Reference
+# DECtalk DTC-01 → SAPI5 Synth Driver: Design Reference
 
 Ground truth for a multi-session build. Do not re-derive these facts from
 memory — they were pulled from the actual MAME driver source and the 1984
 DTC-01 Owner's Manual (OCR). Sources are cited inline.
 
-## 0. Legal / asset handling
+## 0. Two things out of the way
 
 - The DTC-01 main-CPU ROMs and DSP ROMs are Digital Equipment Corp / Fonix
-  copyrighted firmware. They are **never** committed to this repo and
-  **never** shipped inside the `.nvda-addon` package.
-- `roms_extracted/` at the project root holds the user's own dumped ROM set
-  for local development/testing only. Verified against MAME's known-good
-  SHA1 hashes (see §2) — all 16 main-CPU v2.0 ROMs and the DSP `204/205`
-  pair matched exactly, as did the full v1.8 set (§21).
-- The shipped addon ships zero ROM bytes. On first run it points the user
-  at a config folder and validates checksums via `tools/rom_loader.py`
-  logic before allowing the synth to start.
-- Two files in the user's zip are *not* part of the MAME `dectalk` ROM_START
-  and are unused/unexplained: `chargen-15ie.bin` (2048B) and `dump1.bin`/
-  `dump5.bin` (4096B each). Leave them alone — not needed for this driver.
+  copyrighted firmware. They are considered proprietary abandonware since the companies are long defunct, and will be included with this repo for compilation to work.  - @rommix0 (9/12/2026)
+
+- Some info here only pertains to NVDA, and do not apply to SAPI. Leaving some here for safekeeping while changing NVDA to SAPI5. - @rommix0 (9/12/2026)
 
 ## 1. Hardware architecture
 
@@ -54,6 +45,7 @@ Local copy: `research/mame_dectalk.cpp`.
   screen-reader use case — stub it to always-idle/no tone/no ring.
 
 ## 2. ROM layout (verified SHA1, v2.0 firmware — first-half tag 23Jul84,
+
    second-half tag 02Jul84 — with a DSP pair. `409/410` is now preferred for
    v2.0 (see §21: it works once the FIFO bug is fixed, and is crackle-free
    where `204/205` has a faint crackle); `204/205` is kept as a fallback.
@@ -111,18 +103,18 @@ All of the above were confirmed byte-for-byte against the user's dump on
 Verbatim from the driver's own comment block (address lines a23..a1,
 UDS/LDS via a0). Key regions:
 
-| Range (before mirror) | Access | Function |
-|---|---|---|
-| `0x000000–0x03ffff` | R | ROM (mirrored across `0x740000`) |
-| `0x080000–0x093fff` | RW | RAM (mirrored across `0x760000`) |
-| `0x094000–0x0943ff` (umask 0x00ff) | W | Status LED byte |
-| `0x094000–0x0941ff` (umask 0xff00) | RW | X2212 NVRAM direct read/write |
-| `0x094200–0x0943ff` (umask 0xff00) | RW | NVRAM recall (R) / store (W) trigger |
-| `0x098000–0x09801f` (umask 0x00ff) | RW | SCN2681 DUART (a0 not connected) |
-| `0x09c000–0x09c001` | RW | SPC flags reg: d7 infifo-semaphore(R), d6 spc-irq-enable(RW), d5 fifo-error(R), d1 clear-error/semaphore(W), d0 speech-init/reset(RW) |
-| `0x09c002–0x09c003` | W | SPC infifo write (clocks the 32-word input FIFO to the DSP) |
-| `0x09c004–0x09c005` | RW | TLC flags (telephone/DTMF — stub, not needed) |
-| `0x09c006–0x09c007` | R | TLC DTMF read (stub, not needed) |
+| Range (before mirror)              | Access | Function                                                                                                                              |
+| ---------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `0x000000–0x03ffff`                | R      | ROM (mirrored across `0x740000`)                                                                                                      |
+| `0x080000–0x093fff`                | RW     | RAM (mirrored across `0x760000`)                                                                                                      |
+| `0x094000–0x0943ff` (umask 0x00ff) | W      | Status LED byte                                                                                                                       |
+| `0x094000–0x0941ff` (umask 0xff00) | RW     | X2212 NVRAM direct read/write                                                                                                         |
+| `0x094200–0x0943ff` (umask 0xff00) | RW     | NVRAM recall (R) / store (W) trigger                                                                                                  |
+| `0x098000–0x09801f` (umask 0x00ff) | RW     | SCN2681 DUART (a0 not connected)                                                                                                      |
+| `0x09c000–0x09c001`                | RW     | SPC flags reg: d7 infifo-semaphore(R), d6 spc-irq-enable(RW), d5 fifo-error(R), d1 clear-error/semaphore(W), d0 speech-init/reset(RW) |
+| `0x09c002–0x09c003`                | W      | SPC infifo write (clocks the 32-word input FIFO to the DSP)                                                                           |
+| `0x09c004–0x09c005`                | RW     | TLC flags (telephone/DTMF — stub, not needed)                                                                                         |
+| `0x09c006–0x09c007`                | R      | TLC DTMF read (stub, not needed)                                                                                                      |
 
 ## 4. TMS32010 side
 
@@ -153,6 +145,7 @@ and is the single source of truth for "what has been spoken so far" —
 this is what makes sample-accurate synthetic indexing possible (§7).
 
 ## 6. DECtalk v2.0 in-line command language (verified from the actual 1984
+
    DTC-01 Owner's Manual, `EK-DTC01-OM-002`, 2nd ed. May 1984 — NOT the
    later "DECtalk Software" SDK docs at dectalk.github.io, which describe
    a different, later product generation with a superset command set that
@@ -166,52 +159,52 @@ this is what makes sample-accurate synthetic indexing possible (§7).
   selected with short mnemonic commands (`:np` Paul, `:nb` Betty, `:nh`
   Harry, `:nf` Frank, `:nr` Rita, `:nu` Ursula, `:nw` Wendy, `:nk` Kit,
   `:nv` the user-modifiable "Val" slot) — confirm exact set against
-  Table 5-2 "New Voice Commands" before finalizing the NVDA voice list
+  Table 5-2 "New Voice Commands" before finalizing the SAPI5 voice list
   (not yet fully extracted — **follow-up needed**).
 - **NO `[:index mark]` command exists in this firmware.** Confirmed by
   full-text search of the OCR'd manual — zero hits for "index mark" /
   "Index Mark" as a command. This is a later DECtalk Software addition.
-  See §7 for how NVDA indexing is achieved anyway.
+  See §7 for how SAPI5 indexing is achieved anyway.
 - **`[:dv ...]` Design Voice parameters** — Table 5-3, verified verbatim
   from the manual (OCR'd table was column-scrambled; reconstructed by
   matching the alphabetical abbreviation list against the matching
   alphabetical description list, both of which independently line up
   1:1):
 
-| Abbr | Meaning | Min | Max | Unit |
-|---|---|---|---|---|
-| `ap` | Average pitch | 50 | 300+ | Hz |
-| `as` | Assertiveness | 0 | 100 | % |
-| `b4` | 4th formant bandwidth | 100 | 2048 | Hz |
-| `b5` | 5th formant bandwidth | 100 | 2048 | Hz |
-| `bf` | Beginning pitch baseline fall | 50 | 200 | Hz |
-| `br` | Breathiness | 0 | 60 | dB |
-| `ef` | End pitch baseline fall | 50 | 200 | Hz (OCR showed "dB"; almost certainly Hz to match `bf` — verify against ROM disassembly or real unit before shipping) |
-| `f4` | 4th formant frequency | 2500 | `f5`-250 | Hz |
-| `f5` | 5th formant frequency | coupled to `f4` (`f4`+250 .. ~4900) | | Hz — OCR-ambiguous, treat as coupled range, re-derive precisely later |
-| `fo` | Forte voice | 0 | 100 | % |
-| `ft` | F0-dependent spectral tilt | 0 | 100 | % |
-| `g1`–`g5` | Synthesizer gain 1–5 | 0 | 80 | dB |
-| `gf` | Gain of frication source | 0 | 80 | dB |
-| `gh` | Gain of aspiration source | 0 | 80 | dB |
-| `gn` | Gain of nasal resonator | 0 | 80 | dB |
-| `gv` | Gain of voicing source | 0 | 80 | dB |
-| `hs` | Head size | 75 | 150 | % |
-| `la` | Laryngealization | 0 | 100 | % |
-| `nf` | Samples in glottal pulse open phase | 0 | 60 | (int) |
-| `p4` | Parallel formant 4 frequency | — | — | tied to `f4` |
-| `p5` | Parallel formant 5 frequency | — | — | tied to `f5` |
-| `pr` | Pitch range | 0 | 250 | % |
-| `ri` | Richness | 0 | 100 | % |
-| `sex` | 0=female / 1=male (also accepts `f`/`m`) | | | |
-| `sm` | Smoothness (high-freq attenuation) | 0 | 24 | dB |
+| Abbr      | Meaning                                  | Min                                 | Max      | Unit                                                                                                                  |
+| --------- | ---------------------------------------- | ----------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------- |
+| `ap`      | Average pitch                            | 50                                  | 300+     | Hz                                                                                                                    |
+| `as`      | Assertiveness                            | 0                                   | 100      | %                                                                                                                     |
+| `b4`      | 4th formant bandwidth                    | 100                                 | 2048     | Hz                                                                                                                    |
+| `b5`      | 5th formant bandwidth                    | 100                                 | 2048     | Hz                                                                                                                    |
+| `bf`      | Beginning pitch baseline fall            | 50                                  | 200      | Hz                                                                                                                    |
+| `br`      | Breathiness                              | 0                                   | 60       | dB                                                                                                                    |
+| `ef`      | End pitch baseline fall                  | 50                                  | 200      | Hz (OCR showed "dB"; almost certainly Hz to match `bf` — verify against ROM disassembly or real unit before shipping) |
+| `f4`      | 4th formant frequency                    | 2500                                | `f5`-250 | Hz                                                                                                                    |
+| `f5`      | 5th formant frequency                    | coupled to `f4` (`f4`+250 .. ~4900) |          | Hz — OCR-ambiguous, treat as coupled range, re-derive precisely later                                                 |
+| `fo`      | Forte voice                              | 0                                   | 100      | %                                                                                                                     |
+| `ft`      | F0-dependent spectral tilt               | 0                                   | 100      | %                                                                                                                     |
+| `g1`–`g5` | Synthesizer gain 1–5                     | 0                                   | 80       | dB                                                                                                                    |
+| `gf`      | Gain of frication source                 | 0                                   | 80       | dB                                                                                                                    |
+| `gh`      | Gain of aspiration source                | 0                                   | 80       | dB                                                                                                                    |
+| `gn`      | Gain of nasal resonator                  | 0                                   | 80       | dB                                                                                                                    |
+| `gv`      | Gain of voicing source                   | 0                                   | 80       | dB                                                                                                                    |
+| `hs`      | Head size                                | 75                                  | 150      | %                                                                                                                     |
+| `la`      | Laryngealization                         | 0                                   | 100      | %                                                                                                                     |
+| `nf`      | Samples in glottal pulse open phase      | 0                                   | 60       | (int)                                                                                                                 |
+| `p4`      | Parallel formant 4 frequency             | —                                   | —        | tied to `f4`                                                                                                          |
+| `p5`      | Parallel formant 5 frequency             | —                                   | —        | tied to `f5`                                                                                                          |
+| `pr`      | Pitch range                              | 0                                   | 250      | %                                                                                                                     |
+| `ri`      | Richness                                 | 0                                   | 100      | %                                                                                                                     |
+| `sex`     | 0=female / 1=male (also accepts `f`/`m`) |                                     |          |                                                                                                                       |
+| `sm`      | Smoothness (high-freq attenuation)       | 0                                   | 24       | dB                                                                                                                    |
 
   Plus `list`, `listall`, `save` (actions, not values).
 
 - **No native "hat rise" / "stress rise" / "quickness" / "lax
   breathiness" parameters exist on this firmware.** These are terms from
   later DECtalk Software (the user's original request used that later
-  vocabulary). Map user-facing NVDA settings honestly:
+  vocabulary). Map user-facing SAPI5 settings honestly:
   - "Head Size" → `hs` (real, direct match)
   - "Breathiness" → `br` (real, direct match)
   - "Laryngealization" → `la` (real, direct match) — do **not** invent a
@@ -225,18 +218,18 @@ this is what makes sample-accurate synthetic indexing possible (§7).
 
 ## 7. Synthetic indexing design (user-approved 2026-07-28)
 
-Because the firmware has no index-mark concept, NVDA index tracking is
+Because the firmware has no index-mark concept, SAPI5 index tracking is
 built entirely in our own driver/emulator layer, not derived from
 anything the DTC-01 sends back:
 
-1. Split each NVDA speech sequence into chunks at every `IndexCommand`.
+1. Split each SAPI5 speech sequence into chunks at every `IndexCommand`.
 2. Feed chunk N's text into the emulated infifo as normal.
 3. Because our harness runs the *exact* cycle-stepped simulation (§5),
    it has ground truth for "has the firmware fully drained everything
    related to chunk N" — poll internal state (infifo empty AND outfifo
    empty AND held stable for a short debounce window) rather than
    inspecting the audio stream.
-4. Only once that idle state is confirmed, fire the NVDA index callback
+4. Only once that idle state is confirmed, fire the SAPI5 index callback
    for chunk N's IndexCommand and release chunk N+1 into the infifo.
 5. Trade-off accepted by the user: a small, tunable silence gap at each
    index boundary (target: imperceptible, likely masked by DECtalk's own
@@ -276,16 +269,16 @@ otherwise the panel would name a voice the ROM silently ignores.
 Original (v1.8) set — seven built-in voices plus one user-definable slot,
 selected with `[:n_]`:
 
-| Command | Name | Characteristics |
-|---|---|---|
-| `:np` | Perfect Paul | standard male |
-| `:nb` | Beautiful Betty | standard female |
-| `:nh` | Huge Harry | deep male |
-| `:nf` | Frail Frank | older male |
-| `:nk` | Kit the Kid | child's voice (10yo) |
-| `:nr` | Rough Rita | deep female |
-| `:nu` | Uppity Ursula | light female |
-| `:nv` | Variable Val | user-definable (holds whatever `[:dv ... save]` last stored) |
+| Command | Name            | Characteristics                                              |
+| ------- | --------------- | ------------------------------------------------------------ |
+| `:np`   | Perfect Paul    | standard male                                                |
+| `:nb`   | Beautiful Betty | standard female                                              |
+| `:nh`   | Huge Harry      | deep male                                                    |
+| `:nf`   | Frail Frank     | older male                                                   |
+| `:nk`   | Kit the Kid     | child's voice (10yo)                                         |
+| `:nr`   | Rough Rita      | deep female                                                  |
+| `:nu`   | Uppity Ursula   | light female                                                 |
+| `:nv`   | Variable Val    | user-definable (holds whatever `[:dv ... save]` last stored) |
 
 A voice change needs a brief silence around it (the manual recommends
 putting a clause boundary/comma before or after a mid-utterance `[:n_]`).
@@ -335,6 +328,7 @@ unrelated parallel subsystem, not the real blocker; (2) faking
 tone-detect made no observable difference at all.
 
 **Next steps to try when resuming:**
+
 - Use `tools/disasm68k.py` to read the DUART RX-ready interrupt handler
   itself (find its vector -- IRQ6 handler address at ROM offset 0x78 --
   and disassemble forward from there) to see what it does with each
@@ -381,6 +375,7 @@ per §9's architecture pivot).
 > reference for driving `DectalkMachine`.
 
 **Confirmed call chain, RX side:**
+
 - Level-6 vector = `0x1706` → saves regs, calls a RAM function-pointer at
   `$080532` (set up at boot, presumably normally = the dispatcher below),
   then `JMP $1132` (continuation).
@@ -414,6 +409,7 @@ per §9's architecture pivot).
 
 **Confirmed call chain, SPC (speech) send side** (the other end of the
 pipe, independently traced from the MMIO addresses in DESIGN.md §3):
+
 - Static search of every absolute reference to `$09C000`/`$09C002`
   (spc-flags / infifo-write MMIO) in the ROM found them **all** clustered
   in one module, `0x13C00`–`0x13F98`. This is the actual "feed the SPC"
@@ -462,23 +458,24 @@ this directly from our own dumped ROM** (not just trusting MAME's comment)
 and it reproduces `machine.py`'s `_DEFAULT_NVRAM` array byte-for-byte at
 every populated offset — so our default image is a faithful copy of the
 real one, not a guess. Also found and disassembled the actual NVRAM-recall
+
 + checksum-validate routine (`0x10F52`, matches MAME's noted "`$10f52`
-entry point for nvram check routine"): it reads all 256 NVRAM MMIO nibble
-bytes (`$094000`-`$0941FF`), repacks them into a 64-word block, runs an
-XOR/rotate checksum over words 0-62 against the stored checksum in word 63
-(byte offset 0xFC, matches §2/§9's already-known checksum bytes), and
-separately requires word 0 == 5 (a validity magic number — also matches:
-our default's offset-0 nibble is 5). All consistent and passing, which
-also matches Session 1's observation of a clean self-test with no NVR
-FAULT LED code. **Conclusion: the recalled NVRAM block is valid and
-correctly loaded — this is not a checksum/corruption bug.** What remains
-unknown is the *semantic* mapping of each of the 12 populated nibble
-fields (offsets 0,4,8,0xC,...,0x2C) to named Table 3-2 SET parameters
-(HOST FORMAT/SPEED/SPEAK, LOCAL HOST/SPEAK/EDITED/HARDCOPY/SPOKENSETUP,
-LOCAL SPEED/FORMAT, MODE flags, LOG flags) — the manual doesn't document
-byte layout, so this can only come from disassembling how the recalled
-64-word block (copied further into a per-field structure around
-`0x8279C`-`0x827B8`+ during boot, seen starting at `0x1108C`) is consumed.
+  entry point for nvram check routine"): it reads all 256 NVRAM MMIO nibble
+  bytes (`$094000`-`$0941FF`), repacks them into a 64-word block, runs an
+  XOR/rotate checksum over words 0-62 against the stored checksum in word 63
+  (byte offset 0xFC, matches §2/§9's already-known checksum bytes), and
+  separately requires word 0 == 5 (a validity magic number — also matches:
+  our default's offset-0 nibble is 5). All consistent and passing, which
+  also matches Session 1's observation of a clean self-test with no NVR
+  FAULT LED code. **Conclusion: the recalled NVRAM block is valid and
+  correctly loaded — this is not a checksum/corruption bug.** What remains
+  unknown is the *semantic* mapping of each of the 12 populated nibble
+  fields (offsets 0,4,8,0xC,...,0x2C) to named Table 3-2 SET parameters
+  (HOST FORMAT/SPEED/SPEAK, LOCAL HOST/SPEAK/EDITED/HARDCOPY/SPOKENSETUP,
+  LOCAL SPEED/FORMAT, MODE flags, LOG flags) — the manual doesn't document
+  byte layout, so this can only come from disassembling how the recalled
+  64-word block (copied further into a per-field structure around
+  `0x8279C`-`0x827B8`+ during boot, seen starting at `0x1108C`) is consumed.
 
 **New, stronger finding this session — likely the real root cause
 location**: reused `tools/trace_task_wait.py`'s existing log of every
@@ -500,6 +497,7 @@ environment specifically — e.g. gated on a hardware signal we're not
 asserting, not just an NVRAM value).
 
 **Next steps to try when resuming:**
+
 - Find the task-*creation* OS primitive (allocates a TCB, sets its entry
   PC — distinct from `0x2334`'s ready-queue insert, which only reschedules
   an *existing* TCB) and enumerate every call to it during the boot
@@ -661,6 +659,7 @@ causes `$080328+0x10` (channel B's "waiting task" pointer, stuck at
 and getting woken per-character, exactly as the `0x0CFE` primitive was
 always designed to do. End-to-end (`tools/speak_test.py`, ROM booted,
 settled 0.5s, fed `"[:np] Hello world.\r"`, run 6s):
+
 - **Host TX now produces real bytes** (was always exactly 0 before):
   `b'>[:np] Hello world.\r\n>'` — a clean local-echo-with-prompt,
   exactly matching expected DEC terminal-driver behavior.
@@ -724,14 +723,14 @@ closed).
 
 **Important for future work**: this bug lives in the dev-only WAV
 exporter, not in `machine.py` (which stays hardware-accurate on purpose).
-**The eventual real NVDA-driver audio-output code will need this same
+**The eventual real SAPI5-driver audio-output code will need this same
 "XOR 0x8000 again" correction wherever it turns `on_audio_sample` values
 into actual playback samples** — don't copy the old (buggy) assumption
 that the raw callback value is ready-to-play PCM.
 
 ## 13. Session 3 (2026-07-30) — real-time performance investigation
 
-Before wiring the emulator into an actual NVDA `synthDrivers` package (the
+Before wiring the emulator into an actual SAPI5 `synthDrivers` package (the
 existing `addon/synthDrivers/dectalkDtc01/__init__.py` is still an empty
 stub), measured whether the pure-Python emulator can keep up with live
 audio playback. **It can't, by a wide margin**: baseline was
@@ -745,6 +744,7 @@ compiled extension. Applied, in order (correctness re-verified after
 each step via identical `speak_test.py` host-TX bytes + audio stats, and
 `tools/verify_opcodes.py` re-run clean at the end -- 0 missing/extraneous
 68000 opcodes):
+
 - `__slots__` on `TMS32010`, `Channel`, and `SCN2681` (removes
   per-instance `__dict__` overhead on the hottest classes; skipped on
   `M68000`/`M68000Core` -- it's built via multiple inheritance from
@@ -790,7 +790,7 @@ boot settle: 0.120x → **0.163x**). Matches the "recommended" option's own
 stated expectation almost exactly ("realistic best case is maybe 2-4x...
 likely not enough alone") -- landed at the low end of that, and it is
 **not enough**: 0.189x is still roughly a 5.3x slowdown from real time,
-nowhere close to usable for a live NVDA synth driver. Diminishing
+nowhere close to usable for a live SAPI5 synth driver. Diminishing
 returns had clearly set in by the last couple of changes (negligible
 measured delta). Going further with pure-Python micro-optimization
 is not expected to close a 5x+ gap.
@@ -827,7 +827,7 @@ Everything runs in C; Python only pulls finished audio.
 - **TMS32010** (`native/tms32010.c`), **SCN2681** (`native/duart2681.c`),
   **machine glue** (`native/dtc01.c`) — ported from the Python, quirks
   intact, including the Timer-mode stop semantics from §11.
-- **Binding: ctypes to a flat C DLL**, not a CPython extension. NVDA
+- **Binding: ctypes to a flat C DLL**, not a CPython extension. SAPI5
   ships its own Python whose version moves independently of the dev
   environment; a CPython-ABI extension would need rebuilding per version,
   a plain DLL does not. The boundary is crossed once per audio chunk, so
@@ -891,12 +891,12 @@ reference and the oracle for `tools/compare_native.py`.
 
 ### Performance
 
-| workload | realtime factor |
-|---|---|
+| workload                | realtime factor    |
+| ----------------------- | ------------------ |
 | cold boot + 0.5s settle | 0.12s wall (total) |
-| short utterance (6s) | **10.1x** |
-| typical sentence (10s) | **10.3x** |
-| long paragraph (30s) | **10.6x** |
+| short utterance (6s)    | **10.1x**          |
+| typical sentence (10s)  | **10.3x**          |
+| long paragraph (30s)    | **10.6x**          |
 
 ~10x with comfortable headroom for a screen reader, and the 0.12s cold
 boot means synth startup isn't a noticeable stall. `dtc01_is_idle()` was
@@ -910,51 +910,51 @@ Both build clean, and both import **only `KERNEL32.dll`** (built `/MT`,
 static CRT) — so no VC++ redistributable is needed and they load in any
 process.
 
-**CORRECTION (2026-07-31): NVDA is x64, not x86.** Earlier notes in this
-section claimed "x86 is what NVDA ships" — that was an out-of-date
+**CORRECTION (2026-07-31): SAPI5 is x64, not x86.** Earlier notes in this
+section claimed "x86 is what SAPI5 ships" — that was an out-of-date
 assumption, checked and disproved against the actual installation:
 
 ```
-C:\Program Files\NVDA\nvda.exe   -> PE machine = x64
-C:\Program Files\NVDA\python313.dll -> x64   (NVDA 2026.1.1, Python 3.13)
-C:\Program Files (x86)\NVDA\     -> leftover dir, contains no nvda.exe
+C:\Program Files\SAPI5\nvda.exe   -> PE machine = x64
+C:\Program Files\SAPI5\python313.dll -> x64   (SAPI5 2026.1.1, Python 3.13)
+C:\Program Files (x86)\SAPI5\     -> leftover dir, contains no nvda.exe
 ```
 
-So **`dtc01_x64.dll` is the binary NVDA needs**, and it is the one already
-exercised end-to-end. The `_synthDrivers32` folder inside NVDA is only the
+So **`dtc01_x64.dll` is the binary SAPI5 needs**, and it is the one already
+exercised end-to-end. The `_synthDrivers32` folder inside SAPI5 is only the
 legacy out-of-process bridge for 32-bit SAPI4/SAPI5 COM synths; a Python
-synth driver using ctypes runs in NVDA's main x64 process, so it needs an
+synth driver using ctypes runs in SAPI5's main x64 process, so it needs an
 x64 DLL. The x86 build is retained only as optional legacy support (old
-NVDA / 32-bit Windows) and is still unexercised — nothing depends on it.
+SAPI5 / 32-bit Windows) and is still unexercised — nothing depends on it.
 
-### Verified inside real NVDA (2026-07-31)
+### Verified inside real SAPI5 (2026-07-31)
 
 `tools/make_test_addon.py` packages `addon/globalPlugins/dtc01NativeTest.py`
-into an installable dev-only addon that boots the emulator in NVDA's own
+into an installable dev-only addon that boots the emulator in SAPI5's own
 process a few seconds after startup and announces the result through the
-active synth. Installed into NVDA 2026.1.1 (x64, Python 3.13), it reported:
+active synth. Installed into SAPI5 2026.1.1 (x64, Python 3.13), it reported:
 
 > **"DTC-01 native test passed. 9 times realtime."**
 
 That closes the last real deployment unknown: the DLL loads and runs
-in-process under NVDA's Python 3.13 (not just the dev interpreter), the
+in-process under SAPI5's Python 3.13 (not just the dev interpreter), the
 `synthDrivers.dectalkDtc01.emu.native` import path resolves from inside a
 packaged addon, the firmware boots to LED `0xDA`, synthesis produces
 audio, host-TX bytes are correct, and unmapped accesses are 0. ~9x
-realtime *while NVDA is actively running* (vs ~10x on an idle dev
+realtime *while SAPI5 is actively running* (vs ~10x on an idle dev
 interpreter) — the small drop is expected contention, and the headroom is
 still large.
 
 Both DLLs import **only `KERNEL32.dll`** (static CRT via `/MT`), so no
 VC++ redistributable is a deployment prerequisite.
 
-The test addon is throwaway: it announces on *every* NVDA start, ships no
+The test addon is throwaway: it announces on *every* SAPI5 start, ships no
 ROMs, and reads them from a hardcoded dev path (`DTC01_ROM_DIR` overrides).
 Remove it once the real driver exists.
 
 **Host caveat:** this machine is ARM64 hardware running an x64-emulated
 Python, and its MSVC 14.44 has *no arm64 target* installed (only x64/x86
-under Hostx64/Hostarm64). A native-ARM64 NVDA would need the ARM64
+under Hostx64/Hostarm64). A native-ARM64 SAPI5 would need the ARM64
 toolchain added; `native.py`'s arch detection already anticipates an
 `arm64` tag.
 
@@ -967,14 +967,14 @@ range over the host link. `tools/dump_voice_defaults.py` queries every
 built-in voice this way; the result is baked into
 `protocol/commands.py` as `VOICE_PARAM_DEFAULTS`.
 
-| param | §6 (OCR) | ROM says | note |
-|---|---|---|---|
-| `hs` head size | 75–150 % | **40–200 %** | |
-| `ap` average pitch | 50–300 Hz | **30–300 Hz** | |
-| `br` breathiness | 0–60 dB | **0–72 dB** | |
-| `sm` smoothness | 0–24 dB | **0–100 %** | unit was wrong too |
-| `pr` pitch range | 0–250 % | 0–250 % | matches |
-| `ri` richness | 0–100 % | 0–100 % | matches |
+| param              | §6 (OCR)  | ROM says      | note               |
+| ------------------ | --------- | ------------- | ------------------ |
+| `hs` head size     | 75–150 %  | **40–200 %**  |                    |
+| `ap` average pitch | 50–300 Hz | **30–300 Hz** |                    |
+| `br` breathiness   | 0–60 dB   | **0–72 dB**   |                    |
+| `sm` smoothness    | 0–24 dB   | **0–100 %**   | unit was wrong too |
+| `pr` pitch range   | 0–250 %   | 0–250 %       | matches            |
+| `ri` richness      | 0–100 %   | 0–100 %       | matches            |
 
 The ROM also reports `g5` "Loudness (gain of resonator 5)", 0–80 dB — a
 real hardware volume control. The driver still does volume as software
@@ -985,20 +985,20 @@ wanted.
 **Per-voice defaults matter more than the ranges.** A voice's default is
 often nowhere near the middle of its band:
 
-| voice | `ap` | `pr` | `hs` | `br` | `ri` | `sm` |
-|---|---|---|---|---|---|---|
-| Perfect Paul | 120 | 100 | 100 | 0 | 80 | 54 |
-| Beautiful Betty | 180 | 160 | 100 | 46 | 0 | 44 |
-| Huge Harry | **78** | 50 | 120 | 0 | 86 | 34 |
-| Frail Frank | 153 | 90 | 90 | 50 | 80 | 36 |
-| Kit the Kid | **306** | 180 | 80 | 40 | 40 | 44 |
-| Rough Rita | 106 | 80 | 95 | 0* | 49* | 34 |
-| Uppity Ursula | 264 | 135 | 95 | 0 | 100 | 64 |
+| voice           | `ap`    | `pr` | `hs` | `br` | `ri` | `sm` |
+| --------------- | ------- | ---- | ---- | ---- | ---- | ---- |
+| Perfect Paul    | 120     | 100  | 100  | 0    | 80   | 54   |
+| Beautiful Betty | 180     | 160  | 100  | 46   | 0    | 44   |
+| Huge Harry      | **78**  | 50   | 120  | 0    | 86   | 34   |
+| Frail Frank     | 153     | 90   | 90   | 50   | 80   | 36   |
+| Kit the Kid     | **306** | 180  | 80   | 40   | 40   | 44   |
+| Rough Rita      | 106     | 80   | 95   | 0*   | 49*  | 34   |
+| Uppity Ursula   | 264     | 135  | 95   | 0    | 100  | 64   |
 
 (*Rita: `ri` 0, `br` 49 — the columns above follow the query output.)
 
 This caused a real user-visible bug. The driver originally mapped each
-NVDA slider linearly onto the *absolute* range and sent nothing at 50,
+SAPI5 slider linearly onto the *absolute* range and sent nothing at 50,
 so 50 meant "the voice's own default" while 51 meant a value from the
 middle of the absolute band. On Huge Harry that is 78 Hz versus ~183 Hz —
 a slider step of one produced a huge jump, and moving 45→50→55 went
@@ -1011,6 +1011,7 @@ through the default, so the midpoint is continuous (Harry: 49→77, 50→78,
 position means different absolute values on different voices.
 
 Two consequences worth knowing:
+
 - Kit's default `ap` (306) is **above** the maximum the ROM reports (300),
   so there is no headroom above 50 on her pitch slider — it stays at 306.
   `voice_param()` widens the bounds to include the default rather than
@@ -1090,13 +1091,13 @@ are serviced relative to the 68000.
 Measured across batch sizes (ordinary builds, interleaved trials, 5.6% noise
 floor), against the one-instruction schedule:
 
-| batch | speed | vs base | underruns | rms | peak | envelope |
-|---|---|---|---|---|---|---|
-| 1 | 9.73x | — | 32 | 1470 | 14304 | 71 |
-| 8 | 9.99x | +2.7% | 32 | 1470 | 14304 | 71 |
-| 32 | 17.72x | **+82%** | 28 | 1468 | 14304 | 70 |
-| 128 | 22.85x | +135% | 29 | 1470 | 14304 | 71 |
-| 1000 | 26.40x | +171% | 23 | 1464 | 14064 | 69 |
+| batch | speed  | vs base  | underruns | rms  | peak  | envelope |
+| ----- | ------ | -------- | --------- | ---- | ----- | -------- |
+| 1     | 9.73x  | —        | 32        | 1470 | 14304 | 71       |
+| 8     | 9.99x  | +2.7%    | 32        | 1470 | 14304 | 71       |
+| 32    | 17.72x | **+82%** | 28        | 1468 | 14304 | 70       |
+| 128   | 22.85x | +135%    | 29        | 1470 | 14304 | 71       |
+| 1000  | 26.40x | +171%    | 23        | 1464 | 14064 | 69       |
 
 Batch 8 is bit-identical to batch 1 — most 68000 instructions already cost
 ≥8 cycles, so the budget rarely covers two. Underruns *improve* with
@@ -1114,6 +1115,7 @@ reference is 42.56% versus 42.57% before batching: the batched core is no
 further from the reference than the unbatched one was.
 
 ### Still untried
+
 - Native ARM64 build (this host is ARM64; the toolchain target is not
   installed). Irrelevant to low-end x86, which was the actual question.
 - `EMULATOR_INSTANCES = 3` costs ~0.9s of startup and 3x memory but buys no
@@ -1136,8 +1138,8 @@ without new evidence.
 
 Both in `cancel()`, both previously uncounted and unlogged:
 
-1. **The job queue is drained** — utterances NVDA queued that were never
-   spoken are thrown away. Usually correct (the user moved on), but if NVDA
+1. **The job queue is drained** — utterances SAPI5 queued that were never
+   spoken are thrown away. Usually correct (the user moved on), but if SAPI5
    sends one line as more than one `speak()` call and a cancel lands between
    them, the remainder vanishes. Now counted as `discarded=` in the periodic
    stats line, which is the number to look at first next time.
@@ -1147,16 +1149,16 @@ Both in `cancel()`, both previously uncounted and unlogged:
 
 ### The trace
 
-`<NVDA config>/dectalkDtc01/trace.flag` (presence only, read once at driver
-construction) turns on one INFO line per utterance at four points: what NVDA
+`<SAPI5 config>/dectalkDtc01/trace.flag` (presence only, read once at driver
+construction) turns on one INFO line per utterance at four points: what SAPI5
 handed us, what a cancel discarded, what bytes reached the firmware, and how
-much audio actually reached the device. Those four distinguish "NVDA never
+much audio actually reached the device. Those four distinguish "SAPI5 never
 sent it" from "we discarded it" from "the firmware produced nothing" from
 "audio never got delivered" — which is the fork the report cannot be resolved
 without.
 
 A flag file rather than a settings checkbox (the panel is deliberately short)
-and rather than NVDA's global debug level, which is noisy enough to perturb
+and rather than SAPI5's global debug level, which is noisy enough to perturb
 speech timing. **Remove or demote this once the bug is found**: it records
 everything the screen reader says, which is a privacy consideration and not
 something to leave enabled by default.
@@ -1168,11 +1170,11 @@ emulated blocks (host-independent), but its *wall* cost falls as the core gets
 faster: 40 was chosen as "~100ms at ~10x" and at ~19.7x spends only ~51ms.
 Measured swap rate on echo-length text cancelled after 4 blocks:
 
-| `QUICK_DRAIN_BLOCKS` | wall | swap rate |
-|---|---|---|
-| 40 | ~51ms | 53% |
-| **80** | ~102ms | **20%** |
-| 120 | ~152ms | 0% |
+| `QUICK_DRAIN_BLOCKS` | wall   | swap rate |
+| -------------------- | ------ | --------- |
+| 40                   | ~51ms  | 53%       |
+| **80**               | ~102ms | **20%**   |
+| 120                  | ~152ms | 0%        |
 
 80 restores the wall cost the constant was tuned for. 120 reaches 0% but
 exceeds the cancelled-keystroke latency budget already accepted.
@@ -1188,11 +1190,11 @@ appeared, the package downloaded, and then nothing. The log ended at
 `DTC-01 updater: offering v0.5.55 from ...` with no error.
 
 Cause: `gui.addonGui.installAddon()` installs the bundle but does **not**
-offer to restart — that is a separate `promptUserForRestart()`, which NVDA's
+offer to restart — that is a separate `promptUserForRestart()`, which SAPI5's
 own Add-on Store calls after installing (`addonStoreGui/controls/storeDialog`
 references both, plus "Add-ons pending install, restart required"). Without
 it the add-on sits staged in `<name>.pendingInstall` and nothing applies it or
-says so. **Restarting NVDA applies a staged install**, which is the recovery
+says so. **Restarting SAPI5 applies a staged install**, which is the recovery
 if this is seen again on an old build.
 
 Two things made it hard to see:
@@ -1200,7 +1202,7 @@ Two things made it hard to see:
 - The success log was written *before* the work: it logged "offering" right
   after `wx.CallAfter` scheduled the call, so it reported success for merely
   scheduling. Outcome logging now happens after the attempt, and distinguishes
-  a failure from the user declining NVDA's own confirmation.
+  a failure from the user declining SAPI5's own confirmation.
 - `tools/check_nvda_api.py` did not and **could not** catch this. The gate
   checks that imported symbols exist; `installAddon` exists. This was a wrong
   assumption about what a function *does*. Do not expect that gate to cover
@@ -1210,7 +1212,7 @@ Two things made it hard to see:
 Related trap, hit at the same time: that machine was running a private
 `--with-roms` build, so updating to a public release removed its bundled
 firmware (README documents this). Either keep a dump in
-`<NVDA config>/dectalkDtc01/roms/`, which survives updates and outranks the
+`<SAPI5 config>/dectalkDtc01/roms/`, which survives updates and outranks the
 bundled copy, or re-install a fresh `--with-roms` package.
 
 ## 19. THE missing-phrase bug (2026-08-01) — firmware input line limit
@@ -1219,13 +1221,13 @@ bundled copy, or re-install a fresh `--with-roms` package.
 not truncate proportionally: it collapses to a fixed ~1.74s stub regardless of
 how much longer the text is. Measured on a clean machine per case:
 
-| payload bytes | audio |
-|---|---|
-| 121 | 8.23s |
-| 133 | 8.89s |
-| **136** | **1.74s** |
-| 203 | 1.74s |
-| 500 | 1.74s |
+| payload bytes | audio     |
+| ------------- | --------- |
+| 121           | 8.23s     |
+| 133           | 8.89s     |
+| **136**       | **1.74s** |
+| 203           | 1.74s     |
+| 500           | 1.74s     |
 
 Below the limit, duration grows linearly with length exactly as expected. The
 cliff sits between 133 and 136 bytes, counting the command prefix and the
@@ -1291,12 +1293,12 @@ until the next utterance flushed it out.
 
 Measured internal gaps:
 
-| text | gap |
-|---|---|
-| `Meddeau: oh that works; ... 20366 of 20366` | **450ms** |
-| `Meddeau: weird? ... 20364 of 20366` | 150ms (exactly at the threshold) |
-| `Noof: I think for some stupid reason ...` | 75ms |
-| `Desktop list`, `Paperback 5 of 12` | 0ms |
+| text                                         | gap                              |
+| -------------------------------------------- | -------------------------------- |
+| `Meddeau: oh that works; ... 20366 of 20366` | **450ms**                        |
+| `Meddeau: weird? ... 20364 of 20366`         | 150ms (exactly at the threshold) |
+| `Noof: I think for some stupid reason ...`   | 75ms                             |
+| `Desktop list`, `Paperback 5 of 12`          | 0ms                              |
 
 §19 made it far more visible: over-limit text used to be discarded by the
 firmware, so little was left to leak. Once the full text is accepted, an
@@ -1349,12 +1351,12 @@ every v1.8 chip, unused: main CPU `23-031…038` / `23-059…066`, DSP
 MAME's driver comments say the wrong DSP pair clips with v1.8. Confirmed
 here by speaking one sentence through all four combinations on our own core:
 
-| main CPU | DSP pair | peak | rms | clipped samples |
-|---|---|---|---|---|
-| v1.8 | 165/166 | 12544 | 474 | 0 |
-| **v1.8** | **204/205** | **32768** | **10390** | **61** |
-| v2.0 | 204/205 | 13536 | 1157 | 0 |
-| v2.0 | 165/166 | 9232 | 193 | 0 |
+| main CPU | DSP pair    | peak      | rms       | clipped samples |
+| -------- | ----------- | --------- | --------- | --------------- |
+| v1.8     | 165/166     | 12544     | 474       | 0               |
+| **v1.8** | **204/205** | **32768** | **10390** | **61**          |
+| v2.0     | 204/205     | 13536     | 1157      | 0               |
+| v2.0     | 165/166     | 9232      | 193       | 0               |
 
 The v1.8 + 204/205 row rails against the 16-bit limit — that is the
 "clips/screeches like hell" the MAME driver header describes. The last row
@@ -1387,7 +1389,6 @@ kinds of dump work. Regression: `tools/test_rom_dsp_preference.py`.
 
 **This section is the investigation record; the cause is in "RESOLVED" below.**
 
-
 Listening test, 2026-08-12: every v1.8 clip is broken. It is recognisably
 speech — fragments are intelligible, so the synthesis is not producing
 noise — but most of the waveform is missing. Measurements agree: **69% of
@@ -1406,17 +1407,17 @@ So "the 165/166 DSP program is silent while 204/205 works" is a known way
 for a *host emulation* to be wrong, not evidence that the ROM pair is bad.
 Our port reproduces the shape of that bug. What has been ruled out:
 
-| hypothesis | how it was ruled out |
-|---|---|
-| DSP stalling / FIFO underrun | DSP writes 31935 samples per 40000 DAC ticks — near full rate, no stall. `outfifo_underruns` is 0. |
-| DAC holding a stale sample | gaps are exact `0x0000`; bursts end mid-swing (−1856), so a held value would be audible, not silent |
-| 68000 starving the DSP | v1.8 writes **more** to the infifo than v2.0 (9811 vs 5890 words per 2 s) |
-| wrong NVRAM image | blank NVRAM vs the v2.0 default moves the silent fraction 68.6% → 69.4%. Not the cause. |
-| CPU interleave granularity | the Python core interleaves one 68000 instruction at a time (MAME's exact historical schedule) and shows the same 69% |
-| missing/incorrect DSP opcodes | the five opcodes only v1.8 executes (`0x24/25/2a/2b/2e`, `LAC` with shift) are implemented, and `_getdata`'s sign-extend-then-shift matches `tms320c1x.cpp` exactly |
-| the DSP idling in a wait loop | during the silent runs it executes **955 distinct PCs** — the full synthesis loop. It is computing silence, not waiting for anything. |
-| a native-only bug | the pure-Python oracle and the C core agree to within a percentage point |
-| INT-line clear on outfifo write | our "inert no-op" is faithful: MAME's `execute_set_input` ignores `CLEAR_LINE` ("Pending Interrupts cannot be cleared!") |
+| hypothesis                      | how it was ruled out                                                                                                                                                |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DSP stalling / FIFO underrun    | DSP writes 31935 samples per 40000 DAC ticks — near full rate, no stall. `outfifo_underruns` is 0.                                                                  |
+| DAC holding a stale sample      | gaps are exact `0x0000`; bursts end mid-swing (−1856), so a held value would be audible, not silent                                                                 |
+| 68000 starving the DSP          | v1.8 writes **more** to the infifo than v2.0 (9811 vs 5890 words per 2 s)                                                                                           |
+| wrong NVRAM image               | blank NVRAM vs the v2.0 default moves the silent fraction 68.6% → 69.4%. Not the cause.                                                                             |
+| CPU interleave granularity      | the Python core interleaves one 68000 instruction at a time (MAME's exact historical schedule) and shows the same 69%                                               |
+| missing/incorrect DSP opcodes   | the five opcodes only v1.8 executes (`0x24/25/2a/2b/2e`, `LAC` with shift) are implemented, and `_getdata`'s sign-extend-then-shift matches `tms320c1x.cpp` exactly |
+| the DSP idling in a wait loop   | during the silent runs it executes **955 distinct PCs** — the full synthesis loop. It is computing silence, not waiting for anything.                               |
+| a native-only bug               | the pure-Python oracle and the C core agree to within a percentage point                                                                                            |
+| INT-line clear on outfifo write | our "inert no-op" is faithful: MAME's `execute_set_input` ignores `CLEAR_LINE` ("Pending Interrupts cannot be cleared!")                                            |
 
 The infifo/outfifo/semaphore handlers were diffed against
 `mame_dectalk.cpp` line by line and match.
@@ -1454,12 +1455,12 @@ subsystem.**
 **Where the DSP diverges.** MAME's DSP writes *exactly* 10000 samples/s
 while speaking — one per DAC tick, paced by the outfifo INT:
 
-| | write rate while speaking | exact-zero writes | first nonzero write |
-|---|---|---|---|
-| MAME v2.0 | 10000/s | — | t=0.5181s |
-| MAME v1.8 | **10000/s** | **3.2%** | t=0.7340s |
-| ours v2.0 | 9993/s | 20–30% | t=0.6755s |
-| ours v1.8 | **8898/s** | **69%** | t=0.4949s |
+|           | write rate while speaking | exact-zero writes | first nonzero write |
+| --------- | ------------------------- | ----------------- | ------------------- |
+| MAME v2.0 | 10000/s                   | —                 | t=0.5181s           |
+| MAME v1.8 | **10000/s**               | **3.2%**          | t=0.7340s           |
+| ours v2.0 | 9993/s                    | 20–30%            | t=0.6755s           |
+| ours v1.8 | **8898/s**                | **69%**           | t=0.4949s           |
 
 Our v2.0 hits the pacing (9993 ≈ 10000) which is why it sounds right. Our
 v1.8 runs 11% short *and* fills 69% of its writes with silence, where MAME
@@ -1514,12 +1515,12 @@ boundary (`emu/machine.py` `run_seconds`, `native/dtc01.c` `dtc01_run_samples`).
 This is our cycle arithmetic expressing what MAME gets from
 `config.m_perfect_cpu_quantum = subtag("dsp")`.
 
-| v1.8 | before | after | MAME |
-|---|---|---|---|
-| soft errors (2 s) | 104 | **0** | 1 |
+| v1.8                      | before | after       | MAME    |
+| ------------------------- | ------ | ----------- | ------- |
+| soft errors (2 s)         | 104    | **0**       | 1       |
 | DSP writes while speaking | 8898/s | **10000/s** | 10000/s |
-| exact-zero samples | 69% | **4.9%** | 3.2% |
-| nonzero audio samples | 9% | **98%** | — |
+| exact-zero samples        | 69%    | **4.9%**    | 3.2%    |
+| nonzero audio samples     | 9%     | **98%**     | —       |
 
 **v2.0 is bit-identical either way** — its DSP uses a laxer wait — so this
 carries no regression risk for the shipping path; realtime factor 15.6x vs
@@ -1568,7 +1569,7 @@ one firmware is still a valid dump.
 
 ## 22. "It stopped after 0.5." (2026-08-13) — a bad split and a stuck DAC
 
-Reported from real use on v1.8: NVDA's add-on dialog was spoken as
+Reported from real use on v1.8: SAPI5's add-on dialog was spoken as
 *"Add-on Installation dialog You are about to install version 0.5."* and
 then nothing. **Two independent bugs**, and only their combination is
 audible as a truncation.
@@ -1609,12 +1610,12 @@ held value been 119 nothing would have happened. v2.0 parks at 0.
 The trigger is narrow and **rate-dependent**, which is why the first
 isolation attempts missed it:
 
-| payload | outcome |
-|---|---|
-| `…version 0.5.` at `[:ra 235]` (the driver's rate at speed 50) | never goes quiet |
-| `…version 0.5.` at `[:ra 350]` | normal, 4.7s |
-| same text, trailing dot removed, `[:ra 235]` | normal, 1.9s |
-| `The version is 0.5.` / `Pi is 3.14.` at `[:ra 235]` | normal — short text does not reach it |
+| payload                                                        | outcome                               |
+| -------------------------------------------------------------- | ------------------------------------- |
+| `…version 0.5.` at `[:ra 235]` (the driver's rate at speed 50) | never goes quiet                      |
+| `…version 0.5.` at `[:ra 350]`                                 | normal, 4.7s                          |
+| same text, trailing dot removed, `[:ra 235]`                   | normal, 1.9s                          |
+| `The version is 0.5.` / `Pi is 3.14.` at `[:ra 235]`           | normal — short text does not reach it |
 
 **Fix:** a block whose samples are all one value is not speech, whatever its
 level (`NativeMachine.is_flat`, applied at both detection sites in `_pump`).
@@ -1654,6 +1655,6 @@ the boot windows) are all v2.0 measurements.
   channel A and the self-test-heavy DUART IP/OP pins can be minimally
   stubbed as long as POST self-tests are bypassed (dipswitch "Skip Self
   Test (IP4)" — driver already documents this path).
-- NVRAM persistence across NVDA restarts — nice-to-have, not required for
+- NVRAM persistence across SAPI5 restarts — nice-to-have, not required for
   v1; can always cold-boot from the ROM-embedded default NVRAM image
   (`ROM_REGION(0x100,"nvram")`, decoded in the driver source).

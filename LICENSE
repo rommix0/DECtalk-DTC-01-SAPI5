@@ -1,6 +1,6 @@
 MIT License
 
-Copyright (c) 2026 Patrick Perdue
+Copyright (c) 2026 Anthony C. Bartman (@rommix0), Patrick Perdue
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -25,8 +25,7 @@ SOFTWARE.
 This licence covers the code in this repository. It does NOT cover:
 
   * The DECtalk DTC-01 firmware ROMs (Digital Equipment Corporation / Fonix).
-    No ROM data is included here in any form. Users must supply their own
-    dump. See DESIGN.md §0.
+    proprietary abandonware. are included here for program to work.
 
   * Musashi, the vendored Motorola 68000 emulation core in native/musashi/,
     which is Copyright Karl Stenerud and separately MIT licensed. Its licence
