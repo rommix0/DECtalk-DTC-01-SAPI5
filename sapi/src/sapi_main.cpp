@@ -11,10 +11,14 @@
 // lives in this DLL, so it needs nothing from DllMain for that; DllMain only
 // has to remember the HMODULE for InprocServer32 registration.
 #include <new>
+#include <string>
+#include <vector>
 #include <windows.h>
 #include <sapi.h>
 
 #include "com.hpp"
+#include "debug_log.h"
+#include "rom_images.hpp"
 #include "voice_registry.hpp"
 #include "DectalkTtsEngine.hpp"
 
@@ -22,6 +26,65 @@ namespace {
 
 HINSTANCE g_dll_handle = nullptr;
 dectalk::com::class_object_factory g_cls_obj_factory;
+
+// This DLL's own directory (with a trailing '\'), from g_dll_handle. Empty on
+// failure. Mirrors DectalkTtsEngine.cpp's this_module_dir(), but anchored on
+// g_dll_handle (set by DllMain) rather than GetModuleHandleExW, since this
+// runs from the DLL's own entry point rather than from inside dtc01common.
+std::wstring dll_module_dir()
+{
+    wchar_t buf[MAX_PATH] = {};
+    const DWORD n = GetModuleFileNameW(g_dll_handle, buf, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) {
+        return {};
+    }
+    std::wstring path(buf, n);
+    const size_t slash = path.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) {
+        return {};
+    }
+    return path.substr(0, slash + 1);
+}
+
+// Which firmware ids ({"v20", "v18"}) this DLL's own <moduledir>\roms holds a
+// complete ROM set for, as narrow strings for write_voice_tokens's filter.
+// Empty (=> register all 18 voices) if the roms dir can't be resolved, holds
+// nothing, or available_versions throws -- so a manual regsvr32 run from a
+// dev tree with no ROMs beside the DLL still registers every voice, exactly
+// like before this filter existed.
+// available_versions only ever returns ASCII literals (L"v20"/L"v18"), so a
+// plain narrowing char-by-char copy is exact -- no codepage/MultiByteToWideChar
+// machinery needed for this.
+std::string narrow_ascii(const std::wstring& w)
+{
+    std::string s;
+    s.reserve(w.size());
+    for (wchar_t c : w) {
+        s += static_cast<char>(c);
+    }
+    return s;
+}
+
+std::vector<std::string> available_firmwares_beside_dll()
+{
+    const std::wstring dir = dll_module_dir();
+    const std::wstring rom_dir = dir.empty() ? L"roms" : dir + L"roms";
+
+    std::vector<std::string> firmwares;
+    try {
+        for (const std::wstring& version : dtc01::available_versions(rom_dir)) {
+            firmwares.push_back(narrow_ascii(version));
+        }
+    }
+    catch (...) {
+        firmwares.clear();
+    }
+
+    DECTALK_LOG("DllRegisterServer: rom dir '%ls' -> %zu firmware(s) found%s",
+                rom_dir.c_str(), firmwares.size(),
+                firmwares.empty() ? " (registering all 18 voices)" : "");
+    return firmwares;
+}
 
 }  // namespace
 
@@ -64,7 +127,8 @@ STDAPI DllRegisterServer()
         // nothing to let drift out of sync with the coclass's real CLSID.
         const std::wstring clsid_str =
             dectalk::com::clsid_as_string<dtc01::sapi::DectalkTtsEngine>();
-        dectalk::sapi::write_voice_tokens(HKEY_LOCAL_MACHINE, clsid_str);
+        const std::vector<std::string> firmwares = available_firmwares_beside_dll();
+        dectalk::sapi::write_voice_tokens(HKEY_LOCAL_MACHINE, clsid_str, firmwares);
         return S_OK;
     }
     catch (const std::bad_alloc&) {

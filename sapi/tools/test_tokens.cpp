@@ -7,7 +7,9 @@
 #include <windows.h>
 #include <cassert>
 #include <cstdio>
+#include <cstring>
 #include <string>
+#include <vector>
 
 #include "registry.hpp"
 #include "voice_registry.hpp"
@@ -110,6 +112,69 @@ int wmain()
     if (remaining != 0) {
         std::fprintf(stderr, "expected 0 token subkeys after removal, found %d\n", remaining);
         assert(false);
+    }
+
+    // --- write_voice_tokens(root, clsid, firmwares) -- ROM-presence filter ---
+    // Task D3: the installer only copies the ROMs for ticked firmwares, so the
+    // engine must register only the voices those ROMs cover. {"v20"} -> the 10
+    // v20 tokens and none of the 8 v18 ones; {"v18"} -> exactly the 8 v18
+    // tokens; {} (empty) -> back-compat, all 18 (a manual regsvr32 with no ROM
+    // filter available at all).
+    {
+        dectalk::sapi::write_voice_tokens(test_root, clsid_str, {"v20"});
+        const int v20_only = count_subkeys(HKEY_CURRENT_USER, tokens_path);
+        if (v20_only != 10) {
+            std::fprintf(stderr, "expected 10 token subkeys for {v20}, found %d\n", v20_only);
+            assert(false);
+        }
+        for (int i = 0; i < dtc01::voice_count(); ++i) {
+            const dtc01::VoiceDef& v = dtc01::VOICES[i];
+            const std::wstring id = dectalk::sapi::token_id_for(v);
+            const bool exists = subkey_exists(HKEY_CURRENT_USER, tokens_path + L"\\" + id);
+            if (std::strcmp(v.firmware, "v20") == 0) {
+                assert(exists && "expected v20 token to exist");
+            }
+            else {
+                assert(!exists && "expected v18 token to be absent when filtering to {v20}");
+            }
+        }
+        dectalk::sapi::remove_voice_tokens(test_root);
+        assert(count_subkeys(HKEY_CURRENT_USER, tokens_path) == 0);
+    }
+
+    {
+        dectalk::sapi::write_voice_tokens(test_root, clsid_str, {"v18"});
+        const int v18_only = count_subkeys(HKEY_CURRENT_USER, tokens_path);
+        if (v18_only != 8) {
+            std::fprintf(stderr, "expected 8 token subkeys for {v18}, found %d\n", v18_only);
+            assert(false);
+        }
+        for (int i = 0; i < dtc01::voice_count(); ++i) {
+            const dtc01::VoiceDef& v = dtc01::VOICES[i];
+            const std::wstring id = dectalk::sapi::token_id_for(v);
+            const bool exists = subkey_exists(HKEY_CURRENT_USER, tokens_path + L"\\" + id);
+            if (std::strcmp(v.firmware, "v18") == 0) {
+                assert(exists && "expected v18 token to exist");
+            }
+            else {
+                assert(!exists && "expected v20 token to be absent when filtering to {v18}");
+            }
+        }
+        dectalk::sapi::remove_voice_tokens(test_root);
+        assert(count_subkeys(HKEY_CURRENT_USER, tokens_path) == 0);
+    }
+
+    {
+        // Empty filter list -- same as the 2-arg overload -- registers all 18.
+        dectalk::sapi::write_voice_tokens(test_root, clsid_str, std::vector<std::string>());
+        const int all = count_subkeys(HKEY_CURRENT_USER, tokens_path);
+        if (all != dtc01::voice_count()) {
+            std::fprintf(stderr, "expected %d token subkeys for {}, found %d\n",
+                         dtc01::voice_count(), all);
+            assert(false);
+        }
+        dectalk::sapi::remove_voice_tokens(test_root);
+        assert(count_subkeys(HKEY_CURRENT_USER, tokens_path) == 0);
     }
 
     // --- cleanup: never leave the throwaway tree behind ---

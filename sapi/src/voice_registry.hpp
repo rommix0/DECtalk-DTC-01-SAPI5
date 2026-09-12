@@ -10,8 +10,10 @@
 #pragma once
 
 #include <windows.h>
+#include <algorithm>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "registry.hpp"
 #include "voices.hpp"
@@ -71,11 +73,56 @@ namespace detail {
     return name;
 }
 
-// Every voice under `root` as its own static token. `root` is HKEY_LOCAL_MACHINE
-// (or HKEY_CURRENT_USER, for a per-user install) in production; tests pass a
-// throwaway key so nothing here ever has to touch the real Speech tree to be
-// exercised.
-inline void write_voice_tokens(HKEY root, const std::wstring& clsid_str)
+namespace detail {
+
+// Writes one voice's token + Attributes subkey under `tokens`. Shared by both
+// write_voice_tokens overloads so the actual registry shape lives in exactly
+// one place.
+inline void write_one_voice_token(dectalk::registry::key& tokens, const dtc01::VoiceDef& v,
+                                   const std::wstring& clsid_str)
+{
+    using namespace dectalk::registry;
+
+    const std::wstring name = display_name_for(v);
+
+    key token(tokens, token_id_for(v), KEY_CREATE_SUB_KEY | KEY_SET_VALUE, true);
+    token.set(name);
+    token.set(L"CLSID", clsid_str);
+    // SAPI looks a display name up under a value named for the LCID it is
+    // asking about, falling back to the key's default value, set just above.
+    token.set(L"409", name);
+
+    key attrs(token, L"Attributes", KEY_SET_VALUE, true);
+    attrs.set(L"Name", name);
+    attrs.set(L"Gender", v.gender);
+    attrs.set(L"Age", L"Adult");
+    attrs.set(L"Language", L"409");
+    attrs.set(L"Vendor", L"DECtalk");
+    // Read back by SetObjectToken (Task B2), so the exact voice/firmware
+    // pair is recovered without parsing a display name back apart.
+    attrs.set(L"DtcVoice", detail::ascii_to_wstring(v.key));
+    attrs.set(L"DtcFirmware", detail::ascii_to_wstring(v.firmware));
+}
+
+// True if `firmwares` is empty (no filter -> everything passes) or contains
+// v.firmware.
+[[nodiscard]] inline bool firmware_selected(const dtc01::VoiceDef& v,
+                                             const std::vector<std::string>& firmwares)
+{
+    if (firmwares.empty()) {
+        return true;
+    }
+    return std::find(firmwares.begin(), firmwares.end(), std::string(v.firmware)) !=
+           firmwares.end();
+}
+
+}  // namespace detail
+
+// Register only voices whose firmware id (v.firmware, e.g. "v20"/"v18") appears in
+// `firmwares`. An EMPTY list means "no firmware filter" -> register all 18 (so a
+// manual regsvr32 from a dev tree with no ROMs beside the DLL still works).
+inline void write_voice_tokens(HKEY root, const std::wstring& clsid_str,
+                                const std::vector<std::string>& firmwares)
 {
     using namespace dectalk::registry;
 
@@ -83,26 +130,20 @@ inline void write_voice_tokens(HKEY root, const std::wstring& clsid_str)
 
     for (int i = 0; i < dtc01::voice_count(); ++i) {
         const dtc01::VoiceDef& v = dtc01::VOICES[i];
-        const std::wstring name = display_name_for(v);
-
-        key token(tokens, token_id_for(v), KEY_CREATE_SUB_KEY | KEY_SET_VALUE, true);
-        token.set(name);
-        token.set(L"CLSID", clsid_str);
-        // SAPI looks a display name up under a value named for the LCID it is
-        // asking about, falling back to the key's default value, set just above.
-        token.set(L"409", name);
-
-        key attrs(token, L"Attributes", KEY_SET_VALUE, true);
-        attrs.set(L"Name", name);
-        attrs.set(L"Gender", v.gender);
-        attrs.set(L"Age", L"Adult");
-        attrs.set(L"Language", L"409");
-        attrs.set(L"Vendor", L"DECtalk");
-        // Read back by SetObjectToken (Task B2), so the exact voice/firmware
-        // pair is recovered without parsing a display name back apart.
-        attrs.set(L"DtcVoice", detail::ascii_to_wstring(v.key));
-        attrs.set(L"DtcFirmware", detail::ascii_to_wstring(v.firmware));
+        if (!detail::firmware_selected(v, firmwares)) {
+            continue;
+        }
+        detail::write_one_voice_token(tokens, v, clsid_str);
     }
+}
+
+// Every voice under `root` as its own static token. `root` is HKEY_LOCAL_MACHINE
+// (or HKEY_CURRENT_USER, for a per-user install) in production; tests pass a
+// throwaway key so nothing here ever has to touch the real Speech tree to be
+// exercised.
+inline void write_voice_tokens(HKEY root, const std::wstring& clsid_str)
+{
+    write_voice_tokens(root, clsid_str, std::vector<std::string>());
 }
 
 inline void remove_voice_tokens(HKEY root) noexcept
