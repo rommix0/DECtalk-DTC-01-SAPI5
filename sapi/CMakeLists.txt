@@ -12,7 +12,8 @@ add_library(dtc01common STATIC
   src/dtc01_core.cpp
   src/registry.cpp
   src/com.cpp
-  src/DectalkTtsEngine.cpp)
+  src/DectalkTtsEngine.cpp
+  src/ratebooster.cpp)
 target_include_directories(dtc01common PUBLIC src)
 # sapi/ole32/oleaut32 come in with DectalkTtsEngine.cpp (ISpTTSEngine +
 # CoTaskMemAlloc); propagated so the engine's tests/probes link them too.
@@ -37,6 +38,7 @@ add_dtc_tool(test_tokens advapi32)
 add_dtc_tool(test_outputformat sapi ole32 oleaut32 advapi32)
 add_dtc_tool(test_exports)
 add_dtc_tool(test_settings advapi32)
+add_dtc_tool(test_ratebooster)
 
 # sapi_probe drives the real DectalkDtc01SAPI.dll coclass end-to-end through
 # DllGetClassObject (no registration); it links dtc01common like every other
