@@ -9,9 +9,10 @@ endif()
 add_library(dtc01common STATIC
   src/rom_images.cpp
   src/text_pipeline.cpp
-  src/dtc01_core.cpp)
+  src/dtc01_core.cpp
+  src/registry.cpp)
 target_include_directories(dtc01common PUBLIC src)
-target_link_libraries(dtc01common PUBLIC bcrypt)
+target_link_libraries(dtc01common PUBLIC bcrypt advapi32)
 
 add_executable(test_rom_images tools/test_rom_images.cpp)
 target_link_libraries(test_rom_images PRIVATE dtc01common bcrypt)
@@ -27,3 +28,6 @@ target_link_libraries(test_pipeline PRIVATE dtc01common)
 
 add_executable(dtc01_speak tools/dtc01_speak.cpp)
 target_link_libraries(dtc01_speak PRIVATE dtc01common)
+
+add_executable(test_tokens tools/test_tokens.cpp)
+target_link_libraries(test_tokens PRIVATE dtc01common advapi32)
