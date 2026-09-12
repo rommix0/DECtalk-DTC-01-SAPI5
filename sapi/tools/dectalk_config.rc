@@ -1,0 +1,103 @@
+// Dialog for the DECtalk DTC-01 configuration utility.
+//
+// Accessibility is the whole point of this file's layout, not an
+// afterthought: every interactive control is preceded IMMEDIATELY, in
+// resource (and therefore tab) order, by its own static label carrying a
+// unique &accelerator. A screen reader names an unlabelled-by-itself control
+// (a trackbar, a combo box) from the nearest preceding static, so nothing --
+// not even a numeric value readout -- may sit between a label and the
+// control it describes; readouts are therefore placed AFTER their trackbar,
+// never between the label and the trackbar. dectalk_config.cpp additionally
+// pins an explicit IAccPropServices accessible name onto every trackbar and
+// combo box, so the name no longer depends on that layout heuristic either.
+//
+// Every accelerator letter below is unique across the whole dialog (Windows
+// resolves Alt+letter against every control in the active dialog, not just
+// the ones in the same group box), so a couple of labels below use a
+// mnemonic that isn't the first letter of the label -- see the report for
+// the full label/key table.
+#include <windows.h>
+#include "dectalk_config_res.h"
+
+IDD_MAIN DIALOGEX 0, 0, 480, 400
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
+CAPTION "DECtalk DTC-01 Configuration"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "&Voice:", -1, 7, 9, 50, 8
+    COMBOBOX        IDC_VOICE, 60, 7, 180, 160, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+
+    GROUPBOX        "Voice settings", -1, 7, 24, 230, 330
+
+    LTEXT           "&Pitch:", -1, 14, 36, 120, 8
+    CONTROL         "", IDC_PITCH, "msctls_trackbar32",
+                    TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 14, 47, 170, 15
+    RTEXT           "", IDC_PITCH_VAL, 190, 36, 40, 8
+
+    LTEXT           "&Inflection:", -1, 14, 68, 120, 8
+    CONTROL         "", IDC_INFLECTION, "msctls_trackbar32",
+                    TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 14, 79, 170, 15
+    RTEXT           "", IDC_INFLECTION_VAL, 190, 68, 40, 8
+
+    LTEXT           "&Head size:", -1, 14, 100, 120, 8
+    CONTROL         "", IDC_HEADSIZE, "msctls_trackbar32",
+                    TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 14, 111, 170, 15
+    RTEXT           "", IDC_HEADSIZE_VAL, 190, 100, 40, 8
+
+    LTEXT           "&Breathiness:", -1, 14, 132, 120, 8
+    CONTROL         "", IDC_BREATHINESS, "msctls_trackbar32",
+                    TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 14, 143, 170, 15
+    RTEXT           "", IDC_BREATHINESS_VAL, 190, 132, 40, 8
+
+    LTEXT           "&Richness:", -1, 14, 164, 120, 8
+    CONTROL         "", IDC_RICHNESS, "msctls_trackbar32",
+                    TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 14, 175, 170, 15
+    RTEXT           "", IDC_RICHNESS_VAL, 190, 164, 40, 8
+
+    LTEXT           "&Smoothness:", -1, 14, 196, 120, 8
+    CONTROL         "", IDC_SMOOTHNESS, "msctls_trackbar32",
+                    TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 14, 207, 170, 15
+    RTEXT           "", IDC_SMOOTHNESS_VAL, 190, 196, 40, 8
+
+    LTEXT           "&Loudness:", -1, 14, 228, 120, 8
+    CONTROL         "", IDC_LOUDNESS, "msctls_trackbar32",
+                    TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 14, 239, 170, 15
+    RTEXT           "", IDC_LOUDNESS_VAL, 190, 228, 40, 8
+
+    GROUPBOX        "Advanced", -1, 14, 262, 216, 80
+
+    LTEXT           "Lar&yngealization:", -1, 21, 274, 130, 8
+    CONTROL         "", IDC_LARYNGEALIZATION, "msctls_trackbar32",
+                    TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 21, 285, 170, 15
+    RTEXT           "", IDC_LARYNGEALIZATION_VAL, 195, 274, 30, 8
+
+    LTEXT           "&Assertiveness:", -1, 21, 306, 130, 8
+    CONTROL         "", IDC_ASSERTIVENESS, "msctls_trackbar32",
+                    TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 21, 317, 170, 15
+    RTEXT           "", IDC_ASSERTIVENESS_VAL, 195, 306, 30, 8
+
+    GROUPBOX        "Global", -1, 245, 24, 228, 150
+
+    LTEXT           "Rat&e % (25 to 400):", -1, 252, 36, 140, 8
+    CONTROL         "", IDC_RATE, "msctls_trackbar32",
+                    TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 252, 47, 190, 15
+    RTEXT           "", IDC_RATE_VAL, 400, 36, 60, 8
+
+    LTEXT           "Volume &dB (-40 to 12):", -1, 252, 68, 140, 8
+    CONTROL         "", IDC_VOLUME, "msctls_trackbar32",
+                    TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 252, 79, 190, 15
+    RTEXT           "", IDC_VOLUME_VAL, 400, 68, 60, 8
+
+    LTEXT           "Rate b&oost % (0 to 200):", -1, 252, 100, 140, 8
+    CONTROL         "", IDC_RATEBOOST, "msctls_trackbar32",
+                    TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 252, 111, 190, 15
+    RTEXT           "", IDC_RATEBOOST_VAL, 400, 100, 60, 8
+
+    LTEXT           "De&fault firmware:", -1, 252, 132, 110, 8
+    COMBOBOX        IDC_FIRMWARE, 252, 143, 100, 60, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+
+    PUSHBUTTON      "Reset &this voice", IDC_RESET_VOICE, 7, 372, 90, 14
+    PUSHBUTTON      "Reset all setti&ngs", IDC_RESET_ALL, 102, 372, 100, 14
+    PUSHBUTTON      "Play sa&mple", IDC_PREVIEW, 207, 372, 80, 14
+    DEFPUSHBUTTON   "&Close", IDOK, 400, 372, 73, 14
+END

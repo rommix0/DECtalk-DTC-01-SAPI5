@@ -39,6 +39,7 @@ add_dtc_tool(test_outputformat sapi ole32 oleaut32 advapi32)
 add_dtc_tool(test_exports)
 add_dtc_tool(test_settings advapi32)
 add_dtc_tool(test_ratebooster)
+add_dtc_tool(test_config_persist advapi32)
 
 # sapi_probe drives the real DectalkDtc01SAPI.dll coclass end-to-end through
 # DllGetClassObject (no registration); it links dtc01common like every other
@@ -56,3 +57,15 @@ target_link_libraries(DectalkDtc01SAPI PRIVATE dtc01common)
 set_target_properties(DectalkDtc01SAPI PROPERTIES
   OUTPUT_NAME "DectalkDtc01SAPI"
   LINK_FLAGS "/DEF:${CMAKE_CURRENT_SOURCE_DIR}/src/dectalk_sapi.def")
+
+# DectalkConfig: the accessible configuration utility (Task C4). A GUI
+# (WIN32) executable rather than a console tool, so it needs its own
+# add_executable rather than add_dtc_tool -- wWinMain requires the WIN32
+# subsystem, and it has a .rc dialog resource to compile alongside its .cpp.
+# It links dtc01common for voices.hpp/user_settings.hpp/voice_registry.hpp
+# (all header-only) plus registry.cpp's out-of-line RegKey implementation;
+# user32/comctl32 are for the dialog and its trackbars, ole32/oleaut32/sapi
+# for "Play sample" (already PUBLIC on dtc01common, but named here too since
+# the task brief calls them out explicitly as this target's own needs).
+add_executable(DectalkConfig WIN32 tools/dectalk_config.cpp tools/dectalk_config.rc)
+target_link_libraries(DectalkConfig PRIVATE dtc01common user32 comctl32 advapi32 ole32 oleaut32 sapi)
