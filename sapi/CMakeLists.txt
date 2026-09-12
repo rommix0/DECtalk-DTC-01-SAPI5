@@ -21,3 +21,6 @@ target_link_libraries(test_core PRIVATE dtc01common bcrypt)
 
 add_executable(test_voices tools/test_voices.cpp)
 target_link_libraries(test_voices PRIVATE dtc01common)
+
+add_executable(test_pipeline tools/test_pipeline.cpp)
+target_link_libraries(test_pipeline PRIVATE dtc01common)
