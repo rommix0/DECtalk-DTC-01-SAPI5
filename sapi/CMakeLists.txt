@@ -15,3 +15,6 @@ target_link_libraries(dtc01common PUBLIC bcrypt)
 
 add_executable(test_rom_images tools/test_rom_images.cpp)
 target_link_libraries(test_rom_images PRIVATE dtc01common bcrypt)
+
+add_executable(test_core tools/test_core.cpp)
+target_link_libraries(test_core PRIVATE dtc01common bcrypt)
