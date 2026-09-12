@@ -533,14 +533,21 @@ int wmain(int argc, wchar_t** argv)
         const ULONGLONG bytes = site->bytes();
         site->Release();
 
-        // Exact equality means the abort was seen for the first time at the
-        // top-of-for-loop check for fragment 2, with zero fragment-2 bytes
-        // written -- i.e. precisely the fragment-boundary path. A tolerance
-        // of one block (2000 bytes = kBlockSamples*sizeof(int16_t) in
-        // DectalkTtsEngine.cpp) still counts as "the boundary" in case of
-        // any timing slack; anything beyond that means at least one block of
-        // fragment 2 was produced before the abort landed.
-        hit_boundary = (bytes >= F1) && (bytes <= F1 + 2000);
+        // Exact equality is the real guarantee, not just a likely outcome: a
+        // never-aborting fragment ends via the pump loop's bottom-of-loop
+        // idle_runs check, never a GetActions() abort check, so the engine
+        // never re-queries GetActions() once a fragment's own total reaches
+        // F1 -- the next query is the top-of-for-loop check for fragment 2.
+        // A site that aborts once bytes_ >= F1 therefore CANNOT fire inside
+        // fragment 1's own pump; the threshold is only reachable exactly at
+        // the fragment-boundary check, with zero fragment-2 bytes written.
+        // Measured empirically (see the E2 report): bytes came back == F1
+        // exactly (60000 == 60000). This is enforced as a hard assertion,
+        // not just logged -- a regression where the abort instead lands
+        // mid-pump (e.g. if a future change removed the fragment-boundary
+        // `aborted = true` fix and the abort silently fell through to fire
+        // somewhere else) must fail this case, not pass it silently.
+        hit_boundary = (bytes == F1);
         wprintf(L"boundary: F1=%llu TWO_FRAG_FULL=%llu bytes=%llu hr=0x%08X hit_boundary=%hs\n",
                 static_cast<unsigned long long>(F1), static_cast<unsigned long long>(TWO_FRAG_FULL),
                 static_cast<unsigned long long>(bytes), hr, hit_boundary ? "yes" : "no");
@@ -551,10 +558,12 @@ int wmain(int argc, wchar_t** argv)
         if (bytes >= TWO_FRAG_FULL) {
             fail(kRounds + 3, "multi-fragment boundary-abort utterance was not actually truncated");
         }
-        // hit_boundary is diagnostic, not a hard requirement: if it lands
-        // slightly early (still inside fragment 1's own pump) that's still a
-        // meaningful abort/recovery case, just not the exact boundary path.
-        // It is logged above either way; see the report for which happened.
+        if (!hit_boundary) {
+            fail(kRounds + 3, "multi-fragment abort did not land exactly on the fragment boundary "
+                              "(bytes != F1 -- either fragment 1 was cut short, or fragment 2 "
+                              "leaked audio before the abort was seen; the fragment-boundary "
+                              "GetActions() path this case exists to cover was not exercised)");
+        }
     }
 
     // The point of this whole case: prove the fragment-boundary `aborted =
