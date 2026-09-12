@@ -130,12 +130,22 @@ bool is_voice_slider(int id) {
 }
 
 // ---------------------------------------------------------------------------
-// Accessibility: pin an explicit accessible name onto every trackbar, combo
-// box and value readout. A screen reader otherwise guesses a control's name
-// from the nearest preceding static -- the .rc's resource order already
-// makes that guess correct, but pinning the name removes the dependency on
-// that layout heuristic entirely, and lets the announcement include the
-// control's range (which the visible label also states).
+// Accessibility: pin an explicit accessible name onto every trackbar and
+// combo box. A screen reader otherwise guesses a control's name from the
+// nearest preceding static -- the .rc's resource order already makes that
+// guess correct, but pinning the name removes the dependency on that layout
+// heuristic entirely, and lets the announcement include the control's range
+// (which the visible label also states).
+//
+// The IDC_*_VAL readouts are deliberately NOT given a pinned name here: for
+// a plain STATIC, the default MSAA proxy reports the control's current
+// window text as its accessible Name, which is exactly the live number
+// set_slider() writes into it on every change. Pinning a fixed name (e.g.
+// "Pitch value") on one of these would permanently mask that live value
+// behind a generic phrase for any AT reading accName -- defeating the
+// point of a live readout. The trackbar's own pinned name already states
+// the control's range, so nothing is lost by leaving the readout's name
+// alone.
 // ---------------------------------------------------------------------------
 
 void set_accessible_names(HWND dlg) {
@@ -148,29 +158,17 @@ void set_accessible_names(HWND dlg) {
     const struct { int id; const wchar_t* name; } names[] = {
         { IDC_VOICE,                  L"Voice" },
         { IDC_PITCH,                  L"Pitch, 0 to 100" },
-        { IDC_PITCH_VAL,              L"Pitch value" },
         { IDC_INFLECTION,             L"Inflection, 0 to 100" },
-        { IDC_INFLECTION_VAL,         L"Inflection value" },
         { IDC_HEADSIZE,               L"Head size, 0 to 100" },
-        { IDC_HEADSIZE_VAL,           L"Head size value" },
         { IDC_BREATHINESS,            L"Breathiness, 0 to 100" },
-        { IDC_BREATHINESS_VAL,        L"Breathiness value" },
         { IDC_RICHNESS,               L"Richness, 0 to 100" },
-        { IDC_RICHNESS_VAL,           L"Richness value" },
         { IDC_SMOOTHNESS,             L"Smoothness, 0 to 100" },
-        { IDC_SMOOTHNESS_VAL,         L"Smoothness value" },
         { IDC_LOUDNESS,               L"Loudness, 0 to 100" },
-        { IDC_LOUDNESS_VAL,           L"Loudness value" },
         { IDC_LARYNGEALIZATION,       L"Laryngealization, 0 to 100" },
-        { IDC_LARYNGEALIZATION_VAL,   L"Laryngealization value" },
         { IDC_ASSERTIVENESS,          L"Assertiveness, 0 to 100" },
-        { IDC_ASSERTIVENESS_VAL,      L"Assertiveness value" },
         { IDC_RATE,                   L"Rate, 25 to 400 percent" },
-        { IDC_RATE_VAL,               L"Rate value" },
         { IDC_VOLUME,                 L"Volume adjustment, -40 to 12 dB" },
-        { IDC_VOLUME_VAL,             L"Volume adjustment value" },
         { IDC_RATEBOOST,              L"Rate boost, 0 to 200 percent" },
-        { IDC_RATEBOOST_VAL,          L"Rate boost value" },
         { IDC_FIRMWARE,               L"Default firmware" },
     };
     for (const auto& n : names) {
