@@ -8,8 +8,10 @@
 #include <mutex>
 #include <vector>
 
+#include "ratebooster.hpp"
 #include "rom_images.hpp"
 #include "text_pipeline.hpp"
+#include "user_settings.hpp"
 #include "utils.hpp"
 
 namespace dtc01 {
@@ -368,6 +370,50 @@ STDMETHODIMP DectalkTtsEngine::Speak(
             return E_FAIL;  // ROMs/core DLL unresolved, or the core failed to start
         }
 
+        // HKCU settings (Task C4's writer, Task C2 here). Read once per Speak
+        // call so a config-utility change takes effect on the very next
+        // utterance, without re-hitting the registry per fragment/block.
+        // voice_key_/firmware_ are fixed for the lifetime of this engine
+        // instance (set once by SetObjectToken; SAPI never changes voice
+        // mid-utterance for a single ISpTTSEngine), so loading the voice's
+        // sliders once here covers "the current voice" for the whole call.
+        const dectalk::settings::GlobalSettings global = dectalk::settings::load_global();
+        const dectalk::settings::VoiceSettings voice_cfg =
+            dectalk::settings::load_voice(voice_key_.c_str(), firmware_.c_str());
+
+        // 1:1 slider copy (VoiceSettings -> DvParams); dv_command() itself
+        // omits any slider still at 50 (this voice's own default), so an
+        // all-default VoiceSettings still yields the "" fast path.
+        dtc01::DvParams dvp;
+        dvp.inflection       = voice_cfg.inflection;
+        dvp.head_size        = voice_cfg.head_size;
+        dvp.breathiness      = voice_cfg.breathiness;
+        dvp.richness         = voice_cfg.richness;
+        dvp.smoothness       = voice_cfg.smoothness;
+        dvp.loudness         = voice_cfg.loudness;
+        dvp.laryngealization = voice_cfg.laryngealization;
+        dvp.assertiveness    = voice_cfg.assertiveness;
+        dvp.pitch            = voice_cfg.pitch;
+
+        // RateBoost is a percent of *extra* time-compression on top of
+        // whatever rate the SAPI client/RatePercent already produced: 0 ->
+        // factor 1.0 (no-op, direct low-latency Write path below), 100 ->
+        // factor 2.0 (half the duration), clamped to the 0..200 the settings
+        // model itself enforces (RATE_BOOST_MIN/MAX).
+        const double rate_boost_factor =
+            1.0 + std::clamp(global.rate_boost,
+                              dectalk::settings::RATE_BOOST_MIN,
+                              dectalk::settings::RATE_BOOST_MAX) / 100.0;
+        const bool boosting = rate_boost_factor > 1.0;
+
+        // sapi_volume*frag.Volume/100 -> percent, then VolumeDB applied as a
+        // dB gain on top: 20*log10(percent_out/percent_in) = volume_db, i.e.
+        // percent_out = percent_in * 10^(volume_db/20). 0 dB is a no-op.
+        const auto apply_volume_db = [&global](int base_percent) -> int {
+            const double gained = base_percent * std::pow(10.0, global.volume_db / 20.0);
+            return std::clamp(static_cast<int>(std::lround(gained)), 0, 100);
+        };
+
         ULONGLONG event_interest = 0;
         pOutputSite->GetEventInterest(&event_interest);
         const bool want_word     = (event_interest & SPFEI(SPEI_WORD_BOUNDARY)) != 0;
@@ -465,9 +511,13 @@ STDMETHODIMP DectalkTtsEngine::Speak(
                 // Per-fragment rate/volume ride on top of the stream values.
                 const int frag_rate = std::clamp<int>(
                     static_cast<int>(sapi_rate) + frag->State.RateAdj, SAPI_RATE_MIN, SAPI_RATE_MAX);
-                const int wpm = sapi_rate_to_wpm(frag_rate);
-                const int volume = std::clamp<int>(
-                    static_cast<int>(sapi_volume) * frag->State.Volume / 100, 0, 100);
+                // RatePercent (HKCU) scales the SAPI-derived wpm before
+                // rate_command's own clamp to [120, 350] (text_pipeline.cpp)
+                // has the final say -- 100% is a no-op, 200% doubles it.
+                const int wpm = static_cast<int>(
+                    std::lround(sapi_rate_to_wpm(frag_rate) * global.rate_percent / 100.0));
+                const int volume = apply_volume_db(std::clamp<int>(
+                    static_cast<int>(sapi_volume) * frag->State.Volume / 100, 0, 100));
 
                 std::string fed;
                 if (current_mnemonic != mnemonic_) {
@@ -476,7 +526,7 @@ STDMETHODIMP DectalkTtsEngine::Speak(
                     current_mnemonic = mnemonic_;
                 }
                 fed += dtc01::rate_command(wpm);
-                fed += dtc01::dv_command(voice_key_, dtc01::DvParams{});
+                fed += dtc01::dv_command(voice_key_, dvp);
                 fed += sanitized;
                 fed += dtc01::flush_suffix(sanitized);
 
@@ -497,26 +547,36 @@ STDMETHODIMP DectalkTtsEngine::Speak(
                 // (mirrors __init__.py's "silence only counts as finished once
                 // we've heard speech" guard + native.py is_flat/peak).
                 bool speech_started = false;
+                // RateBoost (HKCU) needs WSOLA over the *whole* fragment
+                // (dtc01::time_compress can't work on 0.1s slices), so when
+                // boosting is active this fragment's PCM is accumulated here
+                // instead of being Written block-by-block; the direct-Write,
+                // no-buffering path below is unchanged when factor == 1.0.
+                std::vector<int16_t> frag_pcm;
                 while (produced < kFragCapSamples) {
                     const DWORD a = pOutputSite->GetActions();
                     if (a & SPVES_ABORT) { aborted = true; break; }
                     if (a & SPVES_RATE)   { pOutputSite->GetRate(&sapi_rate); }
                     if (a & SPVES_VOLUME) {
                         pOutputSite->GetVolume(&sapi_volume);
-                        const int v = std::clamp<int>(
-                            static_cast<int>(sapi_volume) * frag->State.Volume / 100, 0, 100);
+                        const int v = apply_volume_db(std::clamp<int>(
+                            static_cast<int>(sapi_volume) * frag->State.Volume / 100, 0, 100));
                         machine_->set_volume(v);
                     }
 
                     const int got = machine_->run_block(buf, kBlockSamples);
                     if (got > 0) {
-                        ULONG written = 0;
-                        const HRESULT hr = pOutputSite->Write(
-                            buf, static_cast<ULONG>(got * sizeof(int16_t)), &written);
-                        if (FAILED(hr)) {
-                            break;
+                        if (boosting) {
+                            frag_pcm.insert(frag_pcm.end(), buf, buf + got);
+                        } else {
+                            ULONG written = 0;
+                            const HRESULT hr = pOutputSite->Write(
+                                buf, static_cast<ULONG>(got * sizeof(int16_t)), &written);
+                            if (FAILED(hr)) {
+                                break;
+                            }
+                            stream_bytes += written;
                         }
-                        stream_bytes += written;
                         produced += got;
                         zero_runs = 0;
 
@@ -545,6 +605,32 @@ STDMETHODIMP DectalkTtsEngine::Speak(
                         }
                     } else {
                         idle_runs = 0;
+                    }
+                }
+
+                // Compress the fragment as a whole and flush it now. On
+                // abort during the pump above, frag_pcm is simply dropped --
+                // "write nothing further" for this fragment.
+                if (boosting && !aborted && !frag_pcm.empty()) {
+                    const std::vector<int16_t> compressed =
+                        dtc01::time_compress(frag_pcm, rate_boost_factor);
+                    size_t offset = 0;
+                    while (offset < compressed.size()) {
+                        if (pOutputSite->GetActions() & SPVES_ABORT) {
+                            aborted = true;
+                            break;
+                        }
+                        const size_t chunk =
+                            std::min<size_t>(compressed.size() - offset, kBlockSamples);
+                        ULONG written = 0;
+                        const HRESULT hr = pOutputSite->Write(
+                            compressed.data() + offset,
+                            static_cast<ULONG>(chunk * sizeof(int16_t)), &written);
+                        if (FAILED(hr)) {
+                            break;
+                        }
+                        stream_bytes += written;
+                        offset += chunk;
                     }
                 }
 
