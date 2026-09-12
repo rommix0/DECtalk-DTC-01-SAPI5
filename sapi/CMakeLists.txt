@@ -10,9 +10,13 @@ add_library(dtc01common STATIC
   src/rom_images.cpp
   src/text_pipeline.cpp
   src/dtc01_core.cpp
-  src/registry.cpp)
+  src/registry.cpp
+  src/com.cpp
+  src/DectalkTtsEngine.cpp)
 target_include_directories(dtc01common PUBLIC src)
-target_link_libraries(dtc01common PUBLIC bcrypt advapi32)
+# sapi/ole32/oleaut32 come in with DectalkTtsEngine.cpp (ISpTTSEngine +
+# CoTaskMemAlloc); propagated so the engine's tests/probes link them too.
+target_link_libraries(dtc01common PUBLIC bcrypt advapi32 sapi ole32 oleaut32)
 
 # Test/tool executables must keep assert() live even in Release, where MSVC
 # would otherwise define NDEBUG and compile asserts to no-ops. /UNDEBUG tells
@@ -30,3 +34,4 @@ add_dtc_tool(test_voices)
 add_dtc_tool(test_pipeline)
 add_dtc_tool(dtc01_speak)
 add_dtc_tool(test_tokens advapi32)
+add_dtc_tool(test_outputformat sapi ole32 oleaut32 advapi32)
