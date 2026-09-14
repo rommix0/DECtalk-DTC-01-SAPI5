@@ -2,15 +2,16 @@
 #include "DectalkTtsEngine.hpp"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <mutex>
 #include <vector>
 
 #include "debug_log.h"
 #include "ratebooster.hpp"
 #include "rom_images.hpp"
+#include "speech_shaper.hpp"
 #include "text_pipeline.hpp"
 #include "user_settings.hpp"
 #include "utils.hpp"
@@ -34,6 +35,41 @@ constexpr int SAPI_RATE_MAX =  10;
 // The DTC-01 word-per-minute range the firmware honours (text_pipeline clamps
 // to the same window; keep in step with commands.py RATE_MIN/MAX_WPM).
 constexpr int DEFAULT_WPM = 180;
+
+// The pump runs the emulator 25 ms at a time. Block size has no effect on
+// what the firmware synthesizes (verified bit-identical from 1 to 2000
+// samples, both firmwares), so it is picked for responsiveness: an abort, a
+// volume change or the first sound of an utterance is noticed within 25 ms of
+// emulated time -- around a millisecond of wall time.
+constexpr size_t kBlockSamples = 250;
+
+// Longest single Write; the host is polled for an abort between writes.
+constexpr size_t kWriteChunkSamples = 1000;
+
+// The firmware silently discards an input line past ~134 bytes, command
+// prefix and ",\r" included (DESIGN.md s19); 120 is the margin the NVDA
+// driver settled on.
+constexpr size_t kFirmwareLineBytes = 120;
+constexpr size_t kFlushBytes = 2;  // flush_suffix() appends at most ",\r"
+constexpr size_t kMinPieceBytes = 32;
+
+// How long the pipeline must stay idle after speech before a piece counts as
+// finished. The firmware can go quiet mid-utterance while it works out how
+// to say something -- 450 ms before a long number (DESIGN.md s20) -- which
+// short text has not been seen to do. Waiting costs compute time only: the
+// idle audio is never written (SpeechShaper).
+constexpr size_t kEndIdleShortSamples = 4000;   // 400 ms
+constexpr size_t kEndIdleLongSamples = 10000;   // 1 s
+constexpr size_t kShortPieceBytes = 40;
+
+// A piece that has been idle this long without making a sound has nothing to
+// say (lone punctuation, for instance). Letter-to-sound on long words holds
+// the pipeline idle for up to ~1.9 s before the first sound on v1.8
+// (DESIGN.md s23). Before this existed such a piece ran to the 120 s cap.
+constexpr size_t kSilentGiveUpSamples = 40000;  // 4 s
+
+// Safety net against a firmware that never settles.
+constexpr size_t kPieceCapSamples = 120 * AUDIO_SAMPLE_RATE;
 
 #ifdef BUILD_X64
 constexpr const wchar_t* kCoreArch = L"x64";
@@ -143,6 +179,16 @@ std::wstring resolve_rom_dir()
     return dir + L"roms";
 }
 
+// Post-boot machine states, keyed by firmware, ROM directory and core DLL and
+// shared by every engine instance in the process. Hosts create a new engine
+// instance on every voice change; with this only the first instance for a
+// firmware pays for the boot. Guarded by exec_mutex().
+std::map<std::wstring, std::vector<uint8_t>>& boot_states()
+{
+    static std::map<std::wstring, std::vector<uint8_t>> states;
+    return states;
+}
+
 // SAPI rate -10..+10 -> words per minute, 0 == DEFAULT_WPM. rate_command()
 // clamps to the firmware's real window, so out-of-band values are safe here.
 int sapi_rate_to_wpm(int sapi_rate)
@@ -152,12 +198,14 @@ int sapi_rate_to_wpm(int sapi_rate)
     return static_cast<int>(std::lround(wpm));
 }
 
-// Right-trim ASCII whitespace, matching text_pipeline flush_suffix's contract
-// that the caller strips trailing whitespace before appending the suffix.
-void rstrip(std::string& s)
+// A carriage return or line feed inside a piece would end the firmware's
+// input line early, leaving the rest of the piece unflushed.
+void flatten_controls(std::string& s)
 {
-    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) {
-        s.pop_back();
+    for (char& c : s) {
+        if (c == '\r' || c == '\n' || c == '\t' || c == '\v' || c == '\f') {
+            c = ' ';
+        }
     }
 }
 
@@ -174,8 +222,8 @@ void add_event(ISpTTSEngineSite* site, SPEVENTENUM id, ULONGLONG offset,
     site->AddEvents(&ev, 1);
 }
 
-// Emit approximate SPEI_WORD_BOUNDARY events for one spoken fragment: words are
-// spread evenly across the audio the fragment produced. The DTC-01 firmware has
+// Emit approximate SPEI_WORD_BOUNDARY events for one spoken piece: words are
+// spread evenly across the audio the piece produced. The DTC-01 firmware has
 // no index/phoneme reporting (design spec §4.4), so this is best-effort and
 // documented as such; highlighting in screen readers degrades gracefully.
 void emit_word_boundaries(ISpTTSEngineSite* site, const std::wstring& raw,
@@ -206,6 +254,183 @@ void emit_word_boundaries(ISpTTSEngineSite* site, const std::wstring& raw,
                   words[i].len, static_cast<LPARAM>(src_offset + words[i].pos),
                   SPET_LPARAM_IS_UNDEFINED);
     }
+}
+
+// The host's volume, the fragment's own and the VolumeDB setting, combined
+// into the 0..100 percent applied to the samples.
+struct Loudness {
+    USHORT host = 100;   // re-read on SPVES_VOLUME
+    ULONG fragment = 100;
+    int volume_db = dectalk::settings::VOLUME_DB_DEF;
+
+    [[nodiscard]] int percent() const
+    {
+        // sapi_volume*frag.Volume/100 -> percent, then VolumeDB applied as a
+        // dB gain on top: 20*log10(percent_out/percent_in) = volume_db, i.e.
+        // percent_out = percent_in * 10^(volume_db/20). 0 dB is a no-op.
+        const int base = std::clamp<int>(static_cast<int>(host) * fragment / 100, 0, 100);
+        const double gained = base * std::pow(10.0, volume_db / 20.0);
+        return std::clamp(static_cast<int>(std::lround(gained)), 0, 100);
+    }
+};
+
+// Everything on its way from the pump to the host. Applies the volume --
+// exactly as dtc01_run_samples did, before the pump took it over so that it
+// judges speech on the firmware's own level -- time-compresses it when rate
+// boost is on, and writes in bounded chunks with an abort check before each.
+class SiteWriter
+{
+public:
+    SiteWriter(ISpTTSEngineSite* site, double rate_boost) : site_(site), booster_(rate_boost) {}
+
+    void set_volume(int percent) { volume_ = percent; }
+
+    // Bytes written so far: the stream offset for events.
+    [[nodiscard]] ULONGLONG bytes() const { return bytes_; }
+
+    // False once the host has aborted or a Write failed.
+    bool write(const int16_t* samples, size_t count)
+    {
+        scaled_.assign(samples, samples + count);
+        if (volume_ < 100) {
+            for (int16_t& s : scaled_) {
+                s = static_cast<int16_t>((static_cast<int32_t>(s) * volume_) / 100);
+            }
+        }
+        if (!booster_.active()) {
+            return send(scaled_.data(), scaled_.size());
+        }
+        boosted_.clear();
+        booster_.push(scaled_.data(), scaled_.size(), boosted_);
+        return send(boosted_.data(), boosted_.size());
+    }
+
+    bool write_silence(size_t samples)
+    {
+        silence_.assign(std::min(samples, kWriteChunkSamples), 0);
+        while (samples > 0) {
+            const size_t n = std::min(samples, silence_.size());
+            if (!send(silence_.data(), n)) {
+                return false;
+            }
+            samples -= n;
+        }
+        return true;
+    }
+
+    // End of a fragment: releases what the rate booster is still holding.
+    bool finish_fragment()
+    {
+        if (!booster_.active()) {
+            return true;
+        }
+        boosted_.clear();
+        booster_.finish(boosted_);
+        return send(boosted_.data(), boosted_.size());
+    }
+
+private:
+    bool send(const int16_t* pcm, size_t count)
+    {
+        for (size_t offset = 0; offset < count;) {
+            if (site_->GetActions() & SPVES_ABORT) {
+                return false;
+            }
+            const size_t chunk = std::min(count - offset, kWriteChunkSamples);
+            ULONG written = 0;
+            // A failed Write is treated exactly like SPVES_ABORT.
+            if (FAILED(site_->Write(pcm + offset, static_cast<ULONG>(chunk * sizeof(int16_t)),
+                                    &written))) {
+                return false;
+            }
+            bytes_ += written;
+            offset += chunk;
+        }
+        return true;
+    }
+
+    ISpTTSEngineSite* site_;
+    dtc01::TimeCompressor booster_;
+    int volume_ = 100;
+    ULONGLONG bytes_ = 0;
+    std::vector<int16_t> scaled_;
+    std::vector<int16_t> boosted_;
+    std::vector<int16_t> silence_;
+};
+
+enum class PieceEnd {
+    Spoken,   // made a sound and went idle: done
+    Silent,   // never made a sound
+    Stuck,    // hit the safety cap; the firmware may still hold speech
+    Aborted,  // the host aborted or a Write failed
+};
+
+// Pumps one fed line until the firmware is done with it, writing only the
+// audio SpeechShaper keeps: the first sound of a Speak call arrives as soon
+// as the firmware makes it, and the silence the pump waits through afterwards
+// never reaches the host. Honours host actions every block (design spec §4.3
+// step 6). Caller holds exec_mutex().
+PieceEnd pump_piece(Machine& machine, ISpTTSEngineSite* site, SiteWriter& out,
+                    Loudness& loudness, long& sapi_rate, bool trim_lead, size_t end_idle)
+{
+    SpeechShaper shaper(trim_lead);
+    std::vector<int16_t> emit;
+    int16_t block[kBlockSamples];
+    size_t produced = 0;
+
+    for (;;) {
+        const DWORD actions = site->GetActions();
+        if (actions & SPVES_ABORT) {
+            return PieceEnd::Aborted;
+        }
+        if (actions & SPVES_RATE) {
+            site->GetRate(&sapi_rate);
+        }
+        if (actions & SPVES_VOLUME) {
+            site->GetVolume(&loudness.host);
+            out.set_volume(loudness.percent());
+        }
+
+        if (produced >= kPieceCapSamples) {
+            return PieceEnd::Stuck;
+        }
+        const int got = machine.run_block(block, static_cast<int>(kBlockSamples));
+        if (got <= 0) {
+            return PieceEnd::Stuck;
+        }
+        produced += static_cast<size_t>(got);
+
+        // The firmware is idle over a block when nothing is queued for it to
+        // say and its output is silent: the DAC holding a value, or parked
+        // within a few LSBs (v1.8 parks at small levels and steps between
+        // them). Machine::is_idle() also waits for the DSP's output FIFO to
+        // drain, which Whispery Wendy's DSP never allows after speaking --
+        // judged by that, her utterances ran to the 120 s cap.
+        constexpr int kQuietSpan = 160;
+        const auto [lo, hi] = std::minmax_element(block, block + got);
+        const bool idle = machine.input_idle() && *hi - *lo <= kQuietSpan;
+
+        emit.clear();
+        shaper.add(block, static_cast<size_t>(got), idle, emit);
+        if (!emit.empty() && !out.write(emit.data(), emit.size())) {
+            return PieceEnd::Aborted;
+        }
+
+        if (shaper.speech_started()) {
+            if (shaper.idle_samples() >= end_idle) {
+                break;
+            }
+        } else if (shaper.idle_samples() >= kSilentGiveUpSamples) {
+            return PieceEnd::Silent;
+        }
+    }
+
+    emit.clear();
+    shaper.finish(emit);
+    if (!emit.empty() && !out.write(emit.data(), emit.size())) {
+        return PieceEnd::Aborted;
+    }
+    return PieceEnd::Spoken;
 }
 
 }  // namespace
@@ -263,6 +488,7 @@ STDMETHODIMP DectalkTtsEngine::SetObjectToken(ISpObjectToken* pToken)
             if (machine_) {
                 machine_.reset();
             }
+            boot_key_.clear();
             voice_key_ = voice_key;
             firmware_  = firmware;
             mnemonic_  = voice->mnemonic;
@@ -356,8 +582,22 @@ bool DectalkTtsEngine::ensure_machine()
                         "(voice=%s firmware=%s)", voice_key_.c_str(), firmware_.c_str());
             return false;
         }
+
+        boot_key_ = firmware_w + L"|" + rom_dir + L"|" + dll_path;
+        auto& states = boot_states();
+        const auto cached = states.find(boot_key_);
+        if (cached != states.end() && machine_->restore_state(cached->second)) {
+            DECTALK_LOG("DectalkTtsEngine: ensure_machine restored the booted state "
+                        "(firmware=%s), no boot needed", firmware_.c_str());
+            return true;
+        }
+
         // Never let the host hear the power-on "DECtalk, version ..." (§4.3 step 2).
         machine_->consume_boot_announcement();
+        std::vector<uint8_t> state;
+        if (machine_->save_state(state)) {
+            states[boot_key_] = std::move(state);
+        }
         return true;
     }
     catch (...) {
@@ -366,6 +606,14 @@ bool DectalkTtsEngine::ensure_machine()
         machine_.reset();
         return false;
     }
+}
+
+// Caller must hold exec_mutex().
+bool DectalkTtsEngine::rewind_machine()
+{
+    const auto& states = boot_states();
+    const auto it = states.find(boot_key_);
+    return it != states.end() && machine_->restore_state(it->second);
 }
 
 STDMETHODIMP DectalkTtsEngine::Speak(
@@ -387,6 +635,22 @@ STDMETHODIMP DectalkTtsEngine::Speak(
         if (!ensure_machine()) {
             return E_FAIL;  // ROMs/core DLL unresolved, or the core failed to start
         }
+
+        // Every utterance starts from the post-boot state. That is what makes
+        // cancelling one free: the DTC-01 firmware has no abort command (design
+        // spec §4.3), so whatever an interrupted utterance fed stays queued in
+        // it -- and rather than draining or resetting and replaying the boot
+        // (4-8 s of emulated time, the old cost of every cancelled keystroke),
+        // this simply rewinds past it. It also means an utterance sounds the
+        // same whatever was spoken before it. Only a core DLL without snapshots
+        // falls back to resetting after an abort (end of this function).
+        const bool rewound = rewind_machine();
+
+        // The pump applies the volume itself (SiteWriter), so that it judges
+        // silence and speech on the firmware's own output level -- a peak test
+        // on scaled audio never saw speech at low volume, and ran every
+        // utterance to the safety cap.
+        machine_->set_volume(100);
 
         // HKCU settings (Task C4's writer, Task C2 here). Read once per Speak
         // call so a config-utility change takes effect on the very next
@@ -415,22 +679,13 @@ STDMETHODIMP DectalkTtsEngine::Speak(
 
         // RateBoost is a percent of *extra* time-compression on top of
         // whatever rate the SAPI client/RatePercent already produced: 0 ->
-        // factor 1.0 (no-op, direct low-latency Write path below), 100 ->
-        // factor 2.0 (half the duration), clamped to the 0..200 the settings
-        // model itself enforces (RATE_BOOST_MIN/MAX).
+        // factor 1.0 (no-op passthrough), 100 -> factor 2.0 (half the
+        // duration), clamped to the 0..200 the settings model itself enforces
+        // (RATE_BOOST_MIN/MAX).
         const double rate_boost_factor =
             1.0 + std::clamp(global.rate_boost,
                               dectalk::settings::RATE_BOOST_MIN,
                               dectalk::settings::RATE_BOOST_MAX) / 100.0;
-        const bool boosting = rate_boost_factor > 1.0;
-
-        // sapi_volume*frag.Volume/100 -> percent, then VolumeDB applied as a
-        // dB gain on top: 20*log10(percent_out/percent_in) = volume_db, i.e.
-        // percent_out = percent_in * 10^(volume_db/20). 0 dB is a no-op.
-        const auto apply_volume_db = [&global](int base_percent) -> int {
-            const double gained = base_percent * std::pow(10.0, global.volume_db / 20.0);
-            return std::clamp(static_cast<int>(std::lround(gained)), 0, 100);
-        };
 
         ULONGLONG event_interest = 0;
         pOutputSite->GetEventInterest(&event_interest);
@@ -440,30 +695,27 @@ STDMETHODIMP DectalkTtsEngine::Speak(
 
         long sapi_rate = 0;
         pOutputSite->GetRate(&sapi_rate);
-        USHORT sapi_volume = 100;
-        pOutputSite->GetVolume(&sapi_volume);
+        Loudness loudness;
+        loudness.volume_db = global.volume_db;
+        pOutputSite->GetVolume(&loudness.host);
 
         // Emit the voice-select prefix only when the voice changes within the
         // utterance; a voice change forces a firmware pause. Starts unset so the
         // first spoken fragment always states the voice.
         std::string current_mnemonic;
 
-        ULONGLONG stream_bytes = 0;   // audio written so far, for event offsets
+        SiteWriter out(pOutputSite, rate_boost_factor);
         bool aborted = false;
-
-        constexpr int  kBlockSamples = 1000;                 // 0.1s at 10 kHz
-        constexpr long kFragCapSamples = 120L * AUDIO_SAMPLE_RATE;  // 120s safety
-        int16_t buf[kBlockSamples];
+        bool stuck = false;
+        // Until the first sound of this call, silence is nothing but latency --
+        // the host is waiting on it -- so the first speaking piece has its
+        // lead-in trimmed back to the waveform. Later pieces keep the pause the
+        // firmware puts ahead of a phrase.
+        bool spoken = false;
 
         for (const SPVTEXTFRAG* frag = pTextFragList; frag && !aborted; frag = frag->pNext) {
             const DWORD actions = pOutputSite->GetActions();
             if (actions & SPVES_ABORT) {
-                // Set aborted (not just break): a multi-fragment utterance can
-                // hit this fragment-boundary check after an earlier fragment
-                // already fed real speech to machine_, so the post-loop
-                // reset-and-recover below (see its comment) must still run --
-                // otherwise that earlier fragment's leftover queued speech
-                // survives into the next Speak() call uncleaned.
                 aborted = true;
                 break;
             }
@@ -471,7 +723,7 @@ STDMETHODIMP DectalkTtsEngine::Speak(
                 pOutputSite->GetRate(&sapi_rate);
             }
             if (actions & SPVES_VOLUME) {
-                pOutputSite->GetVolume(&sapi_volume);
+                pOutputSite->GetVolume(&loudness.host);
             }
 
             switch (frag->State.eAction) {
@@ -482,7 +734,7 @@ STDMETHODIMP DectalkTtsEngine::Speak(
                 const std::wstring mark = (frag->ulTextLen && frag->pTextStart)
                     ? std::wstring(frag->pTextStart, frag->ulTextLen) : std::wstring();
                 const long id = mark.empty() ? 0 : _wtol(mark.c_str());
-                add_event(pOutputSite, SPEI_TTS_BOOKMARK, stream_bytes,
+                add_event(pOutputSite, SPEI_TTS_BOOKMARK, out.bytes(),
                           static_cast<WPARAM>(id),
                           reinterpret_cast<LPARAM>(mark.c_str()),
                           mark.empty() ? SPET_LPARAM_IS_UNDEFINED : SPET_LPARAM_IS_STRING);
@@ -493,20 +745,8 @@ STDMETHODIMP DectalkTtsEngine::Speak(
                 // Approximate: write a run of zeros for the requested duration.
                 const size_t samples =
                     static_cast<size_t>(AUDIO_SAMPLE_RATE) * frag->State.SilenceMSecs / 1000u;
-                std::vector<int16_t> zeros(std::min<size_t>(samples, kBlockSamples), 0);
-                size_t remaining = samples;
-                while (remaining > 0 && !zeros.empty()) {
-                    if (pOutputSite->GetActions() & SPVES_ABORT) { aborted = true; break; }
-                    const size_t chunk = std::min(remaining, zeros.size());
-                    ULONG written = 0;
-                    if (FAILED(pOutputSite->Write(zeros.data(),
-                                                  static_cast<ULONG>(chunk * sizeof(int16_t)),
-                                                  &written))) {
-                        aborted = true;
-                        break;
-                    }
-                    stream_bytes += written;
-                    remaining -= chunk;
+                if (!out.write_silence(samples)) {
+                    aborted = true;
                 }
                 break;
             }
@@ -517,22 +757,15 @@ STDMETHODIMP DectalkTtsEngine::Speak(
                 if (frag->ulTextLen == 0 || !frag->pTextStart) {
                     break;
                 }
-                const std::wstring raw(frag->pTextStart, frag->ulTextLen);
-                const std::string utf8 = dectalk::utils::wstring_to_string(raw);
-
                 // SPVA_SpellOut: minimal/approximate -- the text is fed as-is
                 // (letter-by-letter spelling is a documented follow-up concern);
                 // does not block the utterance.
-                std::string sanitized = dtc01::sanitize_text(utf8);
-                rstrip(sanitized);
-                if (sanitized.empty()) {
-                    break;
-                }
-
-                if (want_sentence) {
-                    add_event(pOutputSite, SPEI_SENTENCE_BOUNDARY, stream_bytes,
-                              frag->ulTextLen, frag->ulTextSrcOffset, SPET_LPARAM_IS_UNDEFINED);
-                }
+                //
+                // sanitize_text() only ever replaces an ASCII character with a
+                // space, so the sanitized text lines up with the fragment unit
+                // for unit: pieces and word boundaries index both alike.
+                const std::wstring text = dectalk::utils::string_to_wstring(dtc01::sanitize_text(
+                    dectalk::utils::wstring_to_string(std::wstring(frag->pTextStart, frag->ulTextLen))));
 
                 // Per-fragment rate/volume ride on top of the stream values.
                 const int frag_rate = std::clamp<int>(
@@ -542,138 +775,80 @@ STDMETHODIMP DectalkTtsEngine::Speak(
                 // has the final say -- 100% is a no-op, 200% doubles it.
                 const int wpm = static_cast<int>(
                     std::lround(sapi_rate_to_wpm(frag_rate) * global.rate_percent / 100.0));
-                const int volume = apply_volume_db(std::clamp<int>(
-                    static_cast<int>(sapi_volume) * frag->State.Volume / 100, 0, 100));
+                loudness.fragment = frag->State.Volume;
+                out.set_volume(loudness.percent());
 
-                std::string fed;
+                std::string prefix;
                 if (current_mnemonic != mnemonic_) {
-                    fed += dtc01::voice_command(mnemonic_.c_str());
-                    fed += " ";
-                    current_mnemonic = mnemonic_;
+                    prefix += dtc01::voice_command(mnemonic_.c_str());
+                    prefix += " ";
                 }
-                fed += dtc01::rate_command(wpm);
-                fed += dtc01::dv_command(voice_key_, dvp);
-                fed += sanitized;
-                fed += dtc01::flush_suffix(sanitized);
+                prefix += dtc01::rate_command(wpm);
+                prefix += dtc01::dv_command(voice_key_, dvp);
 
-                DECTALK_LOG("DectalkTtsEngine: Speak voice=%s firmware=%s wpm=%d pitch=%d "
-                            "volume=%d fed=[%s]", voice_key_.c_str(), firmware_.c_str(), wpm,
-                            dvp.pitch, volume, fed.c_str());
+                const size_t first_budget =
+                    (prefix.size() + kFlushBytes + kMinPieceBytes <= kFirmwareLineBytes)
+                        ? kFirmwareLineBytes - kFlushBytes - prefix.size()
+                        : kMinPieceBytes;
+                const std::vector<dtc01::TextPiece> pieces = dtc01::split_for_firmware(
+                    text, first_budget, kFirmwareLineBytes - kFlushBytes);
+                if (pieces.empty()) {
+                    break;
+                }
 
-                machine_->set_volume(volume);
-                machine_->feed_text(fed);
+                if (want_sentence) {
+                    add_event(pOutputSite, SPEI_SENTENCE_BOUNDARY, out.bytes(),
+                              frag->ulTextLen, frag->ulTextSrcOffset, SPET_LPARAM_IS_UNDEFINED);
+                }
 
-                // Pump this fragment to idle, writing 0.1s blocks and honouring
-                // host actions each block (design spec §4.3 step 6).
-                const ULONGLONG frag_start_bytes = stream_bytes;
-                long produced = 0;
-                int idle_runs = 0;
-                int zero_runs = 0;
-                // v1.8 has a longer letter-to-sound lead-in during which the
-                // FIFOs briefly drain (is_idle() true) before any real audio is
-                // produced; ending on idle then truncates the utterance. Only
-                // let idle end the fragment once speech has actually been heard
-                // -- a block with a peak above the parked-DAC level and not flat
-                // (mirrors __init__.py's "silence only counts as finished once
-                // we've heard speech" guard + native.py is_flat/peak).
-                bool speech_started = false;
-                // RateBoost (HKCU) needs WSOLA over the *whole* fragment
-                // (dtc01::time_compress can't work on 0.1s slices), so when
-                // boosting is active this fragment's PCM is accumulated here
-                // instead of being Written block-by-block; the direct-Write,
-                // no-buffering path below is unchanged when factor == 1.0.
-                std::vector<int16_t> frag_pcm;
-                while (produced < kFragCapSamples) {
-                    const DWORD a = pOutputSite->GetActions();
-                    if (a & SPVES_ABORT) { aborted = true; break; }
-                    if (a & SPVES_RATE)   { pOutputSite->GetRate(&sapi_rate); }
-                    if (a & SPVES_VOLUME) {
-                        pOutputSite->GetVolume(&sapi_volume);
-                        const int v = apply_volume_db(std::clamp<int>(
-                            static_cast<int>(sapi_volume) * frag->State.Volume / 100, 0, 100));
-                        machine_->set_volume(v);
+                bool prefix_sent = false;
+                for (const dtc01::TextPiece& piece : pieces) {
+                    const std::wstring piece_text = text.substr(piece.begin, piece.end - piece.begin);
+                    std::string line = dectalk::utils::wstring_to_string(piece_text);
+                    flatten_controls(line);
+
+                    // The firmware drops an over-long line, and holds only
+                    // about two, so each piece is spoken before the next is fed
+                    // (DESIGN.md s19). Pieces never end in whitespace, so the
+                    // flush suffix sees the real last character.
+                    std::string fed;
+                    if (!prefix_sent) {
+                        fed = prefix;
+                        prefix_sent = true;
+                        current_mnemonic = mnemonic_;
                     }
+                    fed += line;
+                    fed += dtc01::flush_suffix(line);
 
-                    const int got = machine_->run_block(buf, kBlockSamples);
-                    if (got > 0) {
-                        if (boosting) {
-                            frag_pcm.insert(frag_pcm.end(), buf, buf + got);
-                        } else {
-                            ULONG written = 0;
-                            const HRESULT hr = pOutputSite->Write(
-                                buf, static_cast<ULONG>(got * sizeof(int16_t)), &written);
-                            if (FAILED(hr)) {
-                                // A failed Write is treated exactly like SPVES_ABORT: this
-                                // fragment already fed real speech to machine_ (see the
-                                // SPVES_ABORT comment above the fragment loop), and without
-                                // the post-loop reset below that residual queued speech would
-                                // survive into and bleed into the next Speak() call.
-                                aborted = true;
-                                break;
-                            }
-                            stream_bytes += written;
-                        }
-                        produced += got;
-                        zero_runs = 0;
+                    DECTALK_LOG("DectalkTtsEngine: Speak voice=%s firmware=%s wpm=%d pitch=%d "
+                                "volume=%d fed=[%s]", voice_key_.c_str(), firmware_.c_str(), wpm,
+                                dvp.pitch, loudness.percent(), fed.c_str());
 
-                        if (!speech_started) {
-                            int16_t lo = buf[0], hi = buf[0];
-                            int peak = 0;
-                            for (int s = 0; s < got; ++s) {
-                                const int16_t v = buf[s];
-                                if (v < lo) lo = v;
-                                if (v > hi) hi = v;
-                                const int a2 = std::abs(static_cast<int>(v));
-                                if (a2 > peak) peak = a2;
-                            }
-                            const bool flat = (lo == hi);
-                            if (peak > 256 && !flat) {
-                                speech_started = true;
-                            }
-                        }
-                    } else if (++zero_runs > 50) {
-                        break;  // stalled without producing speech; give up on this fragment
+                    const ULONGLONG piece_start = out.bytes();
+                    machine_->feed_text(fed);
+                    const size_t end_idle = line.size() <= kShortPieceBytes
+                        ? kEndIdleShortSamples : kEndIdleLongSamples;
+                    const PieceEnd end = pump_piece(*machine_, pOutputSite, out, loudness,
+                                                    sapi_rate, !spoken, end_idle);
+                    if (end == PieceEnd::Aborted) {
+                        aborted = true;
+                        break;
                     }
-
-                    if (speech_started && machine_->is_idle()) {
-                        if (++idle_runs > 3) {
-                            break;
-                        }
-                    } else {
-                        idle_runs = 0;
+                    if (end == PieceEnd::Stuck) {
+                        stuck = true;
+                    }
+                    if (end == PieceEnd::Spoken) {
+                        spoken = true;
+                    }
+                    if (want_word) {
+                        emit_word_boundaries(pOutputSite, piece_text,
+                                             frag->ulTextSrcOffset + static_cast<ULONG>(piece.begin),
+                                             piece_start, out.bytes() - piece_start);
                     }
                 }
 
-                // Compress the fragment as a whole and flush it now. On
-                // abort during the pump above, frag_pcm is simply dropped --
-                // "write nothing further" for this fragment.
-                if (boosting && !aborted && !frag_pcm.empty()) {
-                    const std::vector<int16_t> compressed =
-                        dtc01::time_compress(frag_pcm, rate_boost_factor);
-                    size_t offset = 0;
-                    while (offset < compressed.size()) {
-                        if (pOutputSite->GetActions() & SPVES_ABORT) {
-                            aborted = true;
-                            break;
-                        }
-                        const size_t chunk =
-                            std::min<size_t>(compressed.size() - offset, kBlockSamples);
-                        ULONG written = 0;
-                        const HRESULT hr = pOutputSite->Write(
-                            compressed.data() + offset,
-                            static_cast<ULONG>(chunk * sizeof(int16_t)), &written);
-                        if (FAILED(hr)) {
-                            aborted = true;
-                            break;
-                        }
-                        stream_bytes += written;
-                        offset += chunk;
-                    }
-                }
-
-                if (want_word && !aborted) {
-                    emit_word_boundaries(pOutputSite, raw, frag->ulTextSrcOffset,
-                                         frag_start_bytes, stream_bytes - frag_start_bytes);
+                if (!aborted && !out.finish_fragment()) {
+                    aborted = true;
                 }
                 break;
             }
@@ -683,39 +858,21 @@ STDMETHODIMP DectalkTtsEngine::Speak(
             }
         }
 
-        // The DTC-01 firmware has no abort/interrupt character (design spec
-        // §4.3): whatever was already fed to it via feed_text() above stays
-        // queued and keeps producing audio regardless of whether the host is
-        // still listening, and machine_ persists across Speak() calls -- so
-        // on abort that leftover speech would otherwise sit ahead of (and
-        // bleed into/lengthen) whatever the *next* Speak() call feeds.
-        //
-        // A block-by-block "run until is_idle()" drain is NOT reliable here:
-        // the firmware's FIFOs can look transiently idle during its
-        // letter-to-sound lead-in before any of the just-fed text has
-        // actually been turned into queued speech (the same gotcha the
-        // per-fragment pump above guards against with speech_started -- see
-        // its comment). An abort landing inside that lead-in window would
-        // make a naive idle-drain declare victory immediately while nearly
-        // the whole aborted utterance is still queued, which is exactly the
-        // corruption this soak exists to catch.
-        //
-        // A hard reset is the only fully deterministic way to guarantee no
-        // residual state survives, and it's cheap (consume_boot_announcement
-        // typically finishes in well under a second, per its own pacing)
-        // next to the alternative of actually playing multiple seconds of
-        // leftover speech out silently. Every Speak() call already re-sends
-        // the voice/rate/volume/DV-slider commands as a prefix (see `fed`
-        // above), so nothing meaningful is lost by resetting between calls.
-        if (aborted) {
+        if ((aborted || stuck) && !rewound) {
+            // No state snapshots (a core DLL built before them), so the next
+            // Speak() cannot rewind past what this one left queued in the
+            // firmware. A block-by-block "run until is_idle()" drain is NOT
+            // reliable -- the FIFOs look transiently idle during letter-to-sound
+            // before the fed text has become queued speech -- so reset and
+            // re-consume the boot announcement, as every abort used to.
             machine_->reset();
             machine_->consume_boot_announcement();
-            DECTALK_LOG("DectalkTtsEngine: Speak aborted; reset the machine so the next "
-                        "utterance starts clean");
+            DECTALK_LOG("DectalkTtsEngine: Speak aborted without state snapshots; reset the "
+                        "machine so the next utterance starts clean");
         }
 
-        DECTALK_LOG("DectalkTtsEngine: Speak done, aborted=%d, %llu audio bytes written",
-                    aborted ? 1 : 0, static_cast<unsigned long long>(stream_bytes));
+        DECTALK_LOG("DectalkTtsEngine: Speak done, aborted=%d, rewound=%d, %llu audio bytes written",
+                    aborted ? 1 : 0, rewound ? 1 : 0, static_cast<unsigned long long>(out.bytes()));
         return S_OK;
     }
     catch (const std::bad_alloc&) {

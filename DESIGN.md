@@ -1626,6 +1626,124 @@ ends in 271 blocks (6.8s) instead of 12000 (300s).
 Both fixes are kept: Bug 1 removes the trigger, Bug 2 removes the failure
 mode. Either alone would have hidden this particular report.
 
+## 23. SAPI speech latency (2026-09-14) — from ~680 ms to ~40 ms
+
+Report: arrowing quickly through a list, DTC-01 took 250–500 ms to respond.
+Measured, the delay from a key press to hearing the next item was worse
+than that, and it had four independent causes. All four are fixed without
+touching synthesis: every sample the engine writes is exactly what the
+firmware produced.
+
+### Where the time went
+
+1. **Every cancelled utterance rebooted the machine.** The firmware has no
+   abort command, so `Speak()` answered `SPVES_ABORT` with `reset()` plus
+   `consume_boot_announcement()` — 4.2 s of emulated time on v2.0, 7.8 s on
+   v1.8. A real NVDA log on a Ryzen 7 260 shows it costing 125 ms (v2.0) and
+   240–340 ms (v1.8) per keystroke before the next utterance could even start;
+   a slower CPU pays proportionally more.
+2. **Leading dead air was written as audio.** After text is fed the firmware
+   spends 150–560 ms in letter-to-sound with the pipeline idle, then the DSP
+   renders a phrase-initial silence. The emulator computes all of that in
+   10–18 ms, but the engine wrote it, so the host played it: 280–720 ms of
+   silence (v2.0), 140–590 ms (v1.8) before every first sound.
+3. **Trailing dead air.** The end-of-utterance debounce (four idle 100 ms
+   blocks) was written too: ~350–430 ms after every last sound, which also
+   delayed the host's end-of-stream event.
+4. **Every new engine instance booted.** Hosts create one per voice change:
+   another 122 ms (v2.0) / 245 ms (v1.8).
+
+Found alongside, all ending at the pump's 120 s safety cap — two minutes of
+silence played in real time unless interrupted:
+
+- **Over-long text.** §19's ~134-byte line limit applies to the SAPI engine
+  too, which fed each fragment as one line: long sentences produced nothing.
+- **Silent text.** A piece the firmware never voices (a lone comma) never
+  satisfied "speech started, then idle".
+- **Whispery Wendy.** Her DSP program keeps its output FIFO topped up with
+  silence after speaking (`in=0 out=1`, flat zeros, forever), so
+  `dtc01_is_idle` — which requires that FIFO empty — never came true on some
+  utterances: "Desktop  list" wrote 118 s of silence after 1.1 s of speech.
+- **Low volume.** Volume was applied inside the DLL before the pump's peak
+  test, so at SAPI volume ≈2% or VolumeDB −40 no block ever counted as speech.
+
+### What changed
+
+- **State snapshots** (`dtc01_state_size/save/restore`, native). Everything
+  from `ram` to `m68k_ctx` plus Musashi's context; ROM images excluded,
+  owner pointers fixed up, volume and diagnostic counters kept. Restore is
+  refused unless the ROM hash and the loaded DLL image (build stamp and
+  address — the Musashi context points into it) match. `test_state_snapshot`
+  proves in-place rewind and cross-machine restore (interleaved with a live
+  machine) are bit-identical, and that a wrong-ROM, truncated or damaged
+  state is rejected without touching the target.
+- **Every `Speak()` starts from the post-boot state.** An abort costs
+  nothing — whatever it left queued is rewound past on the next call — and an
+  utterance sounds the same whatever preceded it. Without the exports (an
+  older core DLL) the old reset path still runs.
+- **Booted states are cached per firmware for the process**, so a new
+  engine instance restores instead of booting.
+- **`SpeechShaper`** decides what is written. Before the first sound of a
+  `Speak()` call nothing is kept but the waveform's attack: from the first
+  moving sample above 256, it walks back to the end of the last 20 ms the
+  DAC held one value (so quiet fricative onsets survive) and keeps 5 ms of
+  that hold. Later pieces keep the firmware's own phrase-initial pause and
+  drop only what was produced while it was idle. After speech, idle audio is
+  held and released only if speech resumes; at the end it is kept up to its
+  last moving sample.
+- **"Idle" for the pump** is `dtc01_input_idle` (no host text, no DSP frames
+  queued — `dtc01_is_idle` minus the output-FIFO condition) *and* a block
+  whose samples span ≤160 LSBs. A piece ends after 400 ms of that (text
+  ≤40 bytes) or 1 s (longer: §20's 450 ms internal gap); it gives up after
+  4 s idle with no sound. Waiting costs compute only — ~12–30 ms wall.
+- **Long text is split** (`split_for_firmware`) at sentence enders, then
+  clause marks, then spaces, into lines of ≤120 bytes including the command
+  prefix and flush suffix, each pumped before the next is fed (§19, §22).
+- **Volume is applied by the engine**, with the DLL's own formula, after
+  speech detection.
+- **Rate boost streams** (`TimeCompressor`): output leaves ~30 ms behind the
+  input instead of after the whole fragment. `test_ratebooster` holds it
+  bit-identical to `time_compress` for every factor, length and chunk size.
+- **25 ms pump blocks.** Block size does not affect synthesis: renders with
+  blocks of 2000, 1000, 250, 100, 37 and 1 samples hash identically on both
+  firmwares.
+
+### Calibration
+
+Fresh machine per line, 10 ms resolution. Longest idle stretch *before* the
+first sound: 20–290 ms for ordinary lines, 670 ms (v2.0) and 1640 ms (v1.8)
+for 110 bytes of very long words at 350 wpm, 1930 ms (v1.8) at 133 bytes.
+Longest idle stretch *inside* speech: ≤10 ms across 14 lines of chat
+messages, long numbers, dates and long words on both firmwares — §20's
+450 ms remains the worst known, hence the 1 s long-text debounce.
+
+### Verification
+
+- `compare_renders.py`, 18 voices × 3 texts against the previous build:
+  54/54 candidate renders are exact slices of the baseline with no audible
+  sample outside them. Mean removed: 300 ms before the first sound,
+  ~360 ms after the last (Wendy's 118 s case aside).
+- `cancel_probe` soak passes (60 rounds; the fragment-boundary case exact).
+- `latency_probe` — Perfect Paul, 12 File Explorer items, each interrupted
+  100 ms after its first sound is heard, against a site that plays in real
+  time and throttles `Write` like SAPI's audio queue (x64, Ryzen 7 260):
+
+| | v2.0 before | v2.0 after | v1.8 before | v1.8 after |
+| --- | --- | --- | --- | --- |
+| key press → next item's sound, mean | 683 ms | **38 ms** | 654 ms | **43 ms** |
+| … worst | 839 ms | 92 ms | 827 ms | 106 ms |
+| abort → `Speak()` returns | ~120 ms | ~1 ms | ~237 ms | ~1 ms |
+| new engine instance, first sound | 633 ms | 38 ms | 572 ms | 34 ms |
+| first utterance in the process | 449 ms | 148 ms | 387 ms | 263 ms |
+| silence after an uninterrupted item | 430 ms | 80 ms | 406 ms | 120 ms |
+
+What remains is the firmware's own time to its first sound (~10–25 ms of
+compute here) plus the host's audio device.
+
+`sapi/tools/verify_audio.py` still mirrors the old pump's block and
+hysteresis rules for its oracle; it already could not run in this repository,
+which no longer carries the Python emulator it drives.
+
 **Why it surfaced now:** nothing here is new — the held-sample behaviour and
 the splitter predate v1.8 support. Making v1.8 selectable in the settings
 panel is what made it reachable, and it is the same lesson as §21: the

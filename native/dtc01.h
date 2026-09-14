@@ -37,6 +37,26 @@ DTC01_API dtc01_t *dtc01_create(const uint8_t *main_rom, int main_rom_len,
 DTC01_API void dtc01_destroy(dtc01_t *m);
 DTC01_API void dtc01_reset(dtc01_t *m);
 
+/* State snapshots: rewind a machine instantly instead of re-running the
+ * firmware from reset. The SAPI engine saves one right after the power-on
+ * announcement and restores it before every utterance, so abandoning an
+ * interrupted utterance costs a memcpy rather than a replay of the boot
+ * (4-8 s of emulated time, which is what made cancelled speech slow).
+ *
+ * A snapshot holds everything that changes as the machine runs -- 68000,
+ * DSP, DUART, RAM, NVRAM, the FIFOs and host queues -- but not the ROM
+ * images, the volume, or the diagnostic counters, which stay the target's.
+ * It restores into any machine created from the same ROM images by this same
+ * loaded copy of the DLL (Musashi's context holds pointers into it); anything
+ * else is rejected and the target is left untouched. In-memory only: this is
+ * not a file format.
+ *
+ * dtc01_state_save returns bytes written, or 0 if len is smaller than
+ * dtc01_state_size(). dtc01_state_restore returns 1, or 0 if rejected. */
+DTC01_API int dtc01_state_size(void);
+DTC01_API int dtc01_state_save(dtc01_t *m, uint8_t *buf, int len);
+DTC01_API int dtc01_state_restore(dtc01_t *m, const uint8_t *buf, int len);
+
 /* Queue host text for the DUART channel-B (host RS-232) link. Bytes are
  * buffered internally and trickled into the DUART as its receive FIFO
  * drains, so arbitrarily long text is safe. Returns bytes queued (short
@@ -60,6 +80,14 @@ DTC01_API int dtc01_read_host_tx(dtc01_t *m, uint8_t *out, int max_len);
  * queued. This is the ground-truth signal the synthetic-indexing design
  * polls to decide a chunk has been fully spoken (DESIGN.md s7). */
 DTC01_API int dtc01_is_idle(const dtc01_t *m);
+
+/* Nothing queued for the firmware to say: no host text waiting, in our queue
+ * or the DUART's, and no frames waiting for the DSP. Unlike dtc01_is_idle
+ * this ignores the output FIFO, which some voices' DSP programs keep topped
+ * up with silence after speaking (Whispery Wendy on v2.0) -- enough on its
+ * own to hold dtc01_is_idle false indefinitely. Pair it with the audio
+ * itself being silent. */
+DTC01_API int dtc01_input_idle(const dtc01_t *m);
 
 /* Output volume, 0-100 (default 100), applied as gain on the DAC samples.
  * The DTC-01 firmware has no volume command -- the real unit had a physical

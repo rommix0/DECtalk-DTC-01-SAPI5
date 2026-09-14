@@ -13,7 +13,8 @@ add_library(dtc01common STATIC
   src/registry.cpp
   src/com.cpp
   src/DectalkTtsEngine.cpp
-  src/ratebooster.cpp)
+  src/ratebooster.cpp
+  src/speech_shaper.cpp)
 target_include_directories(dtc01common PUBLIC src)
 # sapi/ole32/oleaut32 come in with DectalkTtsEngine.cpp (ISpTTSEngine +
 # CoTaskMemAlloc); propagated so the engine's tests/probes link them too.
@@ -42,6 +43,8 @@ add_dtc_tool(test_ratebooster)
 add_dtc_tool(test_config_persist advapi32)
 add_dtc_tool(test_log advapi32)
 add_dtc_tool(dump_pipeline)
+add_dtc_tool(test_speech_shaper)
+add_dtc_tool(test_state_snapshot bcrypt)
 
 # sapi_probe drives the real DectalkDtc01SAPI.dll coclass end-to-end through
 # DllGetClassObject (no registration); it links dtc01common like every other
@@ -54,6 +57,12 @@ add_dtc_tool(sapi_probe sapi ole32 oleaut32 advapi32)
 # path a SAPI host takes) -- same DllGetClassObject/no-registration load as
 # sapi_probe above (see tools/cancel_probe.cpp).
 add_dtc_tool(cancel_probe sapi ole32 oleaut32 advapi32)
+
+# latency_probe: what a screen reader user waits for when moving quickly
+# through items -- each utterance interrupted just after its first sound is
+# heard, against a site that plays back in real time and throttles Write the
+# way SAPI's audio queue does (see tools/latency_probe.cpp).
+add_dtc_tool(latency_probe sapi ole32 oleaut32 advapi32 winmm)
 
 # The in-proc COM server: DectalkTtsEngine.cpp and com.cpp already live in
 # dtc01common (linked below), so the DLL target itself is just the four

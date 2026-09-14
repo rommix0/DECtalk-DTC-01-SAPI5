@@ -72,6 +72,12 @@ class Machine {
     // Speech-pipeline idle: both SPC FIFOs empty and no host text queued.
     bool is_idle();
 
+    // Nothing queued for the firmware to say (dtc01_input_idle): is_idle()
+    // without its output-FIFO condition, which Whispery Wendy's DSP program
+    // never meets after speaking. Pair it with the audio being silent. Falls
+    // back to is_idle() with a core DLL that predates the export.
+    bool input_idle();
+
     void set_volume(int percent);
 
     void reset();
@@ -86,6 +92,16 @@ class Machine {
     // ~25s hard ceiling regardless. Call this once, right after create(),
     // before feeding any real text.
     void consume_boot_announcement();
+
+    // State snapshots (native dtc01_state_*). save_state copies this
+    // machine's complete dynamic state into `out`; restore_state rewinds it
+    // to a state saved from any machine running the same ROM images in this
+    // process, in microseconds. Both return false -- restore_state leaving
+    // the machine untouched -- if the core DLL predates snapshots or rejects
+    // the state; callers then fall back to reset() +
+    // consume_boot_announcement().
+    bool save_state(std::vector<uint8_t>& out);
+    bool restore_state(const std::vector<uint8_t>& state);
 
  private:
     Machine() = default;
@@ -104,6 +120,9 @@ class Machine {
     using Version_t = const char*(__cdecl*)();
     using IntrospectInt_t = int(__cdecl*)(const void*);
     using ReadRam32_t = int(__cdecl*)(const void*, uint32_t, uint32_t*);
+    using StateSize_t = int(__cdecl*)();
+    using StateSave_t = int(__cdecl*)(void*, uint8_t*, int);
+    using StateRestore_t = int(__cdecl*)(void*, const uint8_t*, int);
 
     void* module_ = nullptr;  // HMODULE, stored as void* to keep <windows.h> out of the header
     void* handle_ = nullptr;  // dtc01_t*
@@ -125,6 +144,11 @@ class Machine {
     IntrospectInt_t fn_pending_text_ = nullptr;
     IntrospectInt_t fn_unmapped_accesses_ = nullptr;
     ReadRam32_t fn_read_ram32_ = nullptr;
+    // Optional exports (null with an older core DLL); see create().
+    IsIdle_t fn_input_idle_ = nullptr;
+    StateSize_t fn_state_size_ = nullptr;
+    StateSave_t fn_state_save_ = nullptr;
+    StateRestore_t fn_state_restore_ = nullptr;
 
     // Kept alive for the Machine's lifetime; see create()'s comment above.
     std::vector<uint8_t> main_img_;

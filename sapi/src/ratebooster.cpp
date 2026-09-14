@@ -104,4 +104,100 @@ std::vector<int16_t> time_compress(const std::vector<int16_t>& in, double factor
     return out;
 }
 
+TimeCompressor::TimeCompressor(double factor) {
+    double f = factor;
+    if (f < 1.0) f = 1.0;
+    f = std::min(f, 6.0);
+    active_ = f > 1.0 + 1e-9;
+    hop_ = kSynthesisHop * f;
+    cursor_ = hop_;
+}
+
+void TimeCompressor::push(const int16_t* samples, size_t count, std::vector<int16_t>& out) {
+    if (!active_) {
+        out.insert(out.end(), samples, samples + count);
+        return;
+    }
+    in_.insert(in_.end(), samples, samples + count);
+    total_ += count;
+    if (!started_) {
+        if (total_ < static_cast<size_t>(kFrameSamples)) {
+            return;  // might yet end shorter than a frame: time_compress's passthrough
+        }
+        // The first frame goes straight through, as in time_compress; its last
+        // overlap stays pending for the next frame's crossfade.
+        const auto overlap_at = in_.begin() + (kFrameSamples - kOverlapSamples);
+        out.insert(out.end(), in_.begin(), overlap_at);
+        tail_.assign(overlap_at, in_.begin() + kFrameSamples);
+        started_ = true;
+    }
+    run_frames(false, out);
+}
+
+void TimeCompressor::finish(std::vector<int16_t>& out) {
+    if (active_) {
+        if (started_) {
+            run_frames(true, out);
+            out.insert(out.end(), tail_.begin(), tail_.end());
+        } else {
+            out.insert(out.end(), in_.begin(), in_.end());
+        }
+    }
+    in_.clear();
+    tail_.clear();
+    base_ = 0;
+    total_ = 0;
+    cursor_ = hop_;
+    started_ = false;
+}
+
+void TimeCompressor::run_frames(bool final, std::vector<int16_t>& out) {
+    const int n = static_cast<int>(total_);
+    for (;;) {
+        const int nominal = static_cast<int>(std::lround(cursor_));
+        // Mid-stream a frame is taken only once its whole search window has
+        // arrived, so it is chosen exactly as time_compress chooses it knowing
+        // the final length; finish() takes the remaining frames with that length.
+        if (final ? nominal + kFrameSamples > n
+                  : nominal + kSearchTolerance + kFrameSamples > n) {
+            break;
+        }
+
+        const int lo = std::max(0, nominal - kSearchTolerance);
+        const int hi = std::min(n - kFrameSamples, nominal + kSearchTolerance);
+        int best = nominal;
+        double bestScore = -2.0;
+        for (int cand = lo; cand <= hi; ++cand) {
+            double score = correlation(tail_.data(), &in_[cand - base_], kOverlapSamples);
+            if (score > bestScore) {
+                bestScore = score;
+                best = cand;
+            }
+        }
+
+        const int16_t* frame = &in_[best - base_];
+        for (int i = 0; i < kOverlapSamples; ++i) {
+            double t = static_cast<double>(i) / (kOverlapSamples - 1);
+            double mixed = tail_[i] * (1.0 - t) + frame[i] * t;
+            tail_[i] = clamp16(mixed);
+        }
+        out.insert(out.end(), tail_.begin(), tail_.end());
+        out.insert(out.end(), frame + kOverlapSamples, frame + kFrameSamples - kOverlapSamples);
+        tail_.assign(frame + kFrameSamples - kOverlapSamples, frame + kFrameSamples);
+
+        cursor_ += hop_;
+    }
+
+    // Drop input no later frame can reach: a search starts kSearchTolerance
+    // before its frame's nominal position, and positions only move forward.
+    // The next frame's position can lie beyond the input received so far, so
+    // never drop more than there is.
+    const size_t keep_from = std::min(total_, static_cast<size_t>(std::max(
+        0, static_cast<int>(std::lround(cursor_)) - kSearchTolerance)));
+    if (keep_from > base_ + 8192) {
+        in_.erase(in_.begin(), in_.begin() + (keep_from - base_));
+        base_ = keep_from;
+    }
+}
+
 }  // namespace dtc01

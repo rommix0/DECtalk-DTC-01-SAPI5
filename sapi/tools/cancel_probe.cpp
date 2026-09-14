@@ -11,7 +11,7 @@
 // Unlike sapi_probe, the site here (AbortingSite) is a *cancelling* site: its
 // GetActions() starts returning SPVES_ABORT once the accumulated PCM byte
 // count crosses a configurable threshold, so Speak's abort checks (fragment
-// boundary, audio pump, rate-boost drain -- DectalkTtsEngine.cpp) fire
+// boundary, audio pump, and before every Write -- DectalkTtsEngine.cpp) fire
 // mid-stream, exactly like a SAPI host does when the user keeps moving focus.
 // SPVES_SKIP is intentionally not exercised -- this engine does not handle it
 // (documented in DectalkTtsEngine.cpp / the design spec); only SPVES_ABORT is
@@ -455,28 +455,19 @@ int wmain(int argc, wchar_t** argv)
         }
     }
 
-    // --- multi-fragment fragment-boundary abort case -----------------------
+    // --- abort between fragments ------------------------------------------
     // Everything above uses a single SPVTEXTFRAG per Speak() call, so every
-    // real abort fires inside the audio-pump loop; the *other* abort check in
-    // Speak() -- at the top of the per-fragment for-loop, evaluated when
-    // advancing from one fragment to the next -- is never exercised. That
-    // path is exactly where the fragment-boundary `aborted = true` fix
-    // (DectalkTtsEngine.cpp, ~line 457) matters: without it, an abort that
-    // lands between fragments (after an earlier fragment already fed real
-    // speech to the persistent machine_) would skip the reset-and-recover
-    // cleanup entirely. Build a two-fragment chain and land the abort right
-    // on that boundary.
+    // abort lands inside one fragment's pump. This case aborts a two-fragment
+    // call exactly where fragment 1's audio ends: fragment 2 must write
+    // nothing at all, and the utterance after it must still be clean, with
+    // everything fragment 1 fed the firmware gone.
     //
-    // Reasoning for why threshold == F1 (frag 1's own standalone byte total)
-    // lands the abort *exactly* on the boundary rather than mid-pump: a
-    // never-aborting site's fragment ends via the pump's bottom-of-loop
-    // idle_runs check, never via a GetActions() abort check -- so the engine
-    // never queries GetActions() again after the write that brings the
-    // running total to F1. The *next* time GetActions() is queried is the
-    // top-of-for-loop check for fragment 2, which is therefore the first
-    // point where "bytes_ >= F1" can be observed. If that reasoning holds,
-    // the aborted two-fragment call's byte count should come out exactly F1
-    // (not a single fragment-2 block more) -- checked below.
+    // Why threshold == F1 (fragment 1's standalone byte total) lands there:
+    // every Speak() starts from the same post-boot state, so fragment 1
+    // writes exactly F1 bytes in both calls. After its last write the engine
+    // only polls -- through fragment 1's end-of-utterance wait, then the
+    // abort check at the top of the fragment loop -- so it must see the abort
+    // before fragment 2 writes a single sample.
     const std::wstring frag1_text = L"First fragment of speech.";
     const std::wstring frag2_text = L"Second fragment here.";
 
@@ -533,20 +524,10 @@ int wmain(int argc, wchar_t** argv)
         const ULONGLONG bytes = site->bytes();
         site->Release();
 
-        // Exact equality is the real guarantee, not just a likely outcome: a
-        // never-aborting fragment ends via the pump loop's bottom-of-loop
-        // idle_runs check, never a GetActions() abort check, so the engine
-        // never re-queries GetActions() once a fragment's own total reaches
-        // F1 -- the next query is the top-of-for-loop check for fragment 2.
-        // A site that aborts once bytes_ >= F1 therefore CANNOT fire inside
-        // fragment 1's own pump; the threshold is only reachable exactly at
-        // the fragment-boundary check, with zero fragment-2 bytes written.
-        // Measured empirically (see the E2 report): bytes came back == F1
-        // exactly (60000 == 60000). This is enforced as a hard assertion,
-        // not just logged -- a regression where the abort instead lands
-        // mid-pump (e.g. if a future change removed the fragment-boundary
-        // `aborted = true` fix and the abort silently fell through to fire
-        // somewhere else) must fail this case, not pass it silently.
+        // Exact equality is the guarantee (see the reasoning above), enforced
+        // rather than logged: a byte past F1 is fragment-2 audio written after
+        // the host aborted, and a byte short of it means fragment 1 was cut or
+        // rendered differently from its standalone run.
         hit_boundary = (bytes == F1);
         wprintf(L"boundary: F1=%llu TWO_FRAG_FULL=%llu bytes=%llu hr=0x%08X hit_boundary=%hs\n",
                 static_cast<unsigned long long>(F1), static_cast<unsigned long long>(TWO_FRAG_FULL),
@@ -560,16 +541,13 @@ int wmain(int argc, wchar_t** argv)
         }
         if (!hit_boundary) {
             fail(kRounds + 3, "multi-fragment abort did not land exactly on the fragment boundary "
-                              "(bytes != F1 -- either fragment 1 was cut short, or fragment 2 "
-                              "leaked audio before the abort was seen; the fragment-boundary "
-                              "GetActions() path this case exists to cover was not exercised)");
+                              "(bytes != F1 -- either fragment 1 was cut short or rendered "
+                              "differently, or fragment 2 wrote audio after the abort)");
         }
     }
 
-    // The point of this whole case: prove the fragment-boundary `aborted =
-    // true` fix (DectalkTtsEngine.cpp) means a boundary-landing abort still
-    // gets the reset-and-recover cleanup, exactly like a mid-pump abort does
-    // -- so the *next* clean utterance is still full-length.
+    // And the utterance after that abort is still full-length: nothing
+    // fragment 1 fed the firmware survives into it.
     {
         auto* site = new AbortingSite(kNeverAbort);
         hr = speak_with_watchdog(engine, &frag, site, wfx, kRounds + 4, kWatchdogMs);

@@ -9,7 +9,9 @@
 // in sync with commands.py -- a future task (E1) diffs the two outputs.
 #pragma once
 
+#include <cstddef>
 #include <string>
+#include <vector>
 
 namespace dtc01 {
 
@@ -71,5 +73,28 @@ std::string sanitize_text(const std::string& utf8);
 // trailing whitespace from `sanitized` itself before appending this suffix,
 // since this function only returns the suffix, not the trimmed text.
 std::string flush_suffix(const std::string& sanitized);
+
+// The firmware silently discards an input line longer than ~134 bytes, the
+// command prefix and terminating ",\r" included, and holds only about two
+// lines at once (DESIGN.md s19) -- so long text has to be split, and each
+// piece spoken before the next is fed.
+//
+// One piece is [begin, end) in UTF-16 units of the text passed to
+// split_for_firmware, and never begins or ends with whitespace.
+struct TextPiece {
+    size_t begin;
+    size_t end;
+};
+
+// Splits `text` into pieces whose UTF-8 length is at most `first_budget`
+// bytes for the first piece (which also carries the command prefix) and
+// `budget` bytes for the rest. A piece ends after a sentence ender (.!?) by
+// preference, then a clause mark (,;:), then any whitespace; a mark only
+// counts when whitespace follows it, so "0.5.59", "1,234" and "U.S.A." are
+// never split inside (DESIGN.md s22). A stretch with no whitespace that is
+// longer than the budget is cut where the budget runs out. Whitespace-only
+// text yields no pieces.
+std::vector<TextPiece> split_for_firmware(const std::wstring& text, size_t first_budget,
+                                          size_t budget);
 
 }  // namespace dtc01

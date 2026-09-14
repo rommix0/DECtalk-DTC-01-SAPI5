@@ -68,6 +68,12 @@ private:
     // the core failed to start.
     [[nodiscard]] bool ensure_machine();
 
+    // Puts machine_ back in the state it had right after its boot
+    // announcement, from the process-wide cache ensure_machine() fills.
+    // Must be called with exec_mutex() held and machine_ created. Returns
+    // false if the core DLL has no state snapshots.
+    [[nodiscard]] bool rewind_machine();
+
     ISpObjectTokenPtr token_;
 
     // Resolved from the token's Attributes in SetObjectToken.
@@ -77,6 +83,7 @@ private:
     bool voice_resolved_ = false;
 
     std::unique_ptr<Machine> machine_;
+    std::wstring boot_key_;   // this machine's entry in the booted-state cache
 };
 
 }  // namespace sapi
