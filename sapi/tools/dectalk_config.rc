@@ -81,25 +81,31 @@ BEGIN
                     TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 21, 317, 170, 15
     RTEXT           "", IDC_ASSERTIVENESS_VAL, 195, 306, 30, 8
 
-    GROUPBOX        "Global", -1, 245, 24, 228, 150
+    GROUPBOX        "Global", -1, 245, 24, 228, 172
 
-    LTEXT           "Rat&e % (25 to 400):", -1, 252, 36, 140, 8
+    // First in the group because it decides whether the Rate and Volume
+    // sliders below (and each voice's Pitch) are used at all; while it is
+    // ticked those sliders are disabled.
+    AUTOCHECKBOX    "Allo&w SAPI5 apps to control rate, pitch and volume", IDC_APP_CONTROL,
+                    252, 36, 214, 20, BS_MULTILINE | WS_TABSTOP
+
+    LTEXT           "Rat&e % (25 to 400):", -1, 252, 60, 140, 8
     CONTROL         "", IDC_RATE, "msctls_trackbar32",
-                    TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 252, 47, 190, 15
-    RTEXT           "", IDC_RATE_VAL, 400, 36, 60, 8
+                    TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 252, 71, 190, 15
+    RTEXT           "", IDC_RATE_VAL, 400, 60, 60, 8
 
-    LTEXT           "Volume &dB (-40 to 12):", -1, 252, 68, 140, 8
+    LTEXT           "Volume &dB (-40 to 12):", -1, 252, 92, 140, 8
     CONTROL         "", IDC_VOLUME, "msctls_trackbar32",
-                    TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 252, 79, 190, 15
-    RTEXT           "", IDC_VOLUME_VAL, 400, 68, 60, 8
+                    TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 252, 103, 190, 15
+    RTEXT           "", IDC_VOLUME_VAL, 400, 92, 60, 8
 
-    LTEXT           "Rate b&oost % (0 to 200):", -1, 252, 100, 140, 8
+    LTEXT           "Rate b&oost % (0 to 200):", -1, 252, 124, 140, 8
     CONTROL         "", IDC_RATEBOOST, "msctls_trackbar32",
-                    TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 252, 111, 190, 15
-    RTEXT           "", IDC_RATEBOOST_VAL, 400, 100, 60, 8
+                    TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 252, 135, 190, 15
+    RTEXT           "", IDC_RATEBOOST_VAL, 400, 124, 60, 8
 
-    LTEXT           "De&fault firmware:", -1, 252, 132, 110, 8
-    COMBOBOX        IDC_FIRMWARE, 252, 143, 100, 60, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "De&fault firmware:", -1, 252, 156, 110, 8
+    COMBOBOX        IDC_FIRMWARE, 252, 167, 100, 60, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
 
     PUSHBUTTON      "Reset &this voice", IDC_RESET_VOICE, 7, 372, 90, 14
     PUSHBUTTON      "Reset all setti&ngs", IDC_RESET_ALL, 102, 372, 100, 14

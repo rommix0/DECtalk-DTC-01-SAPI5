@@ -16,6 +16,11 @@
 // makes the voice sliders act on every voice at once: ticking it gives all
 // voices the selected voice's settings, and while it stays ticked each
 // slider change, and "Reset all voices", lands on every voice.
+//
+// "Allow SAPI5 apps to control rate, pitch and volume", ticked by default,
+// leaves those three to the screen reader or other SAPI5 app; the Rate,
+// Volume and Pitch sliders are then disabled. Unticked, the engine ignores the
+// app's rate, pitch and volume and those sliders decide instead.
 #include <windows.h>
 #include <commctrl.h>
 #include <sapi.h>
@@ -44,12 +49,14 @@ namespace {
 constexpr const wchar_t* kTitle = L"DECtalk DTC-01 Configuration";
 
 // ---------------------------------------------------------------------------
-// State: which of the 18 static voices (dtc01::VOICES) is being edited, and
-// whether voice-slider changes go to every voice.
+// State: which of the 18 static voices (dtc01::VOICES) is being edited,
+// whether voice-slider changes go to every voice, and whether the SAPI5 app
+// controls rate, pitch and volume.
 // ---------------------------------------------------------------------------
 
 int g_voice_index = 0;
 bool g_apply_all = false;
+bool g_app_control = true;
 
 ISpVoice* g_preview = nullptr;
 
@@ -154,7 +161,7 @@ bool is_voice_slider(int id) {
 // the control's range, so nothing is lost by leaving the readout's name
 // alone.
 //
-// The check box and buttons need nothing: their own text is their name.
+// The check boxes and buttons need nothing: their own text is their name.
 // ---------------------------------------------------------------------------
 
 void set_accessible_names(HWND dlg) {
@@ -198,6 +205,15 @@ void update_reset_voice_label(HWND dlg) {
     SetDlgItemTextW(dlg, IDC_RESET_VOICE, g_apply_all ? L"Rese&t all voices" : L"Reset &this voice");
 }
 
+// While the SAPI5 app controls rate, pitch and volume, the sliders that would
+// otherwise set them do nothing, so they are disabled rather than left to
+// look as if they work.
+void update_app_controlled_sliders(HWND dlg) {
+    for (int id : { IDC_RATE, IDC_VOLUME, IDC_PITCH }) {
+        EnableWindow(GetDlgItem(dlg, id), g_app_control ? FALSE : TRUE);
+    }
+}
+
 void load_voice_controls(HWND dlg) {
     const dtc01::VoiceDef& v = current_voice();
     const VoiceSettings s = dectalk::settings::load_voice(v.key, v.firmware);
@@ -213,6 +229,10 @@ void load_global_controls(HWND dlg) {
     set_slider(dlg, IDC_RATEBOOST, g.rate_boost);
     SendDlgItemMessageW(dlg, IDC_FIRMWARE, CB_SETCURSEL,
                         g.default_firmware == "v18" ? 1 : 0, 0);
+
+    g_app_control = g.app_control;
+    CheckDlgButton(dlg, IDC_APP_CONTROL, g_app_control ? BST_CHECKED : BST_UNCHECKED);
+    update_app_controlled_sliders(dlg);
 
     g_apply_all = dectalk::settings::load_apply_to_all_voices();
     CheckDlgButton(dlg, IDC_APPLY_ALL, g_apply_all ? BST_CHECKED : BST_UNCHECKED);
@@ -413,6 +433,12 @@ INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wparam, LPARAM lparam) {
         }
         if (id == IDC_APPLY_ALL && code == BN_CLICKED) {
             on_apply_all_clicked(dlg);
+            return TRUE;
+        }
+        if (id == IDC_APP_CONTROL && code == BN_CLICKED) {
+            g_app_control = IsDlgButtonChecked(dlg, IDC_APP_CONTROL) == BST_CHECKED;
+            (void)dectalk_config::set_app_control(g_app_control);
+            update_app_controlled_sliders(dlg);
             return TRUE;
         }
         if (id == IDC_FIRMWARE && code == CBN_SELCHANGE) {

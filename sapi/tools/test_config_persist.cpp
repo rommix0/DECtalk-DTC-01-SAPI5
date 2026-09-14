@@ -103,12 +103,22 @@ int wmain() {
     assert(!load_apply_to_all_voices());
     assert(dectalk_config::set_apply_to_all_voices(true));
 
+    // "Allow SAPI5 apps to control rate, pitch and volume" is on until it is
+    // unticked, and reset_all() turns it back on.
+    assert(load_global().app_control);
+    assert(dectalk_config::set_app_control(false));
+    assert(!load_global().app_control);
+    assert(dectalk_config::set_app_control(true));
+    assert(load_global().app_control);
+    assert(dectalk_config::set_app_control(false));
+
     // reset_all() clears every HKCU value this test (and dectalk_config.cpp)
     // manage; the backup then puts back whatever was saved before the test.
     reset_all();
     assert(load_voice("paul", "v20").head_size == 50);
     assert(load_global().rate_percent == 100);
     assert(!load_apply_to_all_voices());
+    assert(load_global().app_control);
 
     return 0;
 }
