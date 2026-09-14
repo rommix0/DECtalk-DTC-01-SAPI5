@@ -56,6 +56,33 @@ std::string voice_command(const char* mnemonic);
 // an optimization here, it's required for correct playback.
 std::string dv_command(const std::string& voice_key, const DvParams& p);
 
+// The nine Design Voice values the firmware holds for the current voice, in
+// firmware units and dv_command's token order: ap, pr, hs, br, ri, sm, g5, la,
+// as. The firmware keeps a [:dv] value until the voice is selected again, so
+// an utterance whose pitch goes up and comes back down -- NVDA's capital
+// letters -- has to send the way back too (DESIGN.md s24).
+struct DvValues {
+    int value[9];
+};
+
+// What [:n_] loads for this voice: its factory defaults, read from the ROM
+// (VOICE_PARAM_DEFAULTS).
+DvValues dv_defaults(const std::string& voice_key);
+
+// The values DvParams' sliders ask for. A slider at 50, or one whose scaled
+// value lands on the voice's own default, gives exactly that default -- even
+// where [:dv] would not accept it: Kit's average pitch, 306, is above the 300
+// the firmware allows, and sending 306 gets 300.
+DvValues dv_values(const std::string& voice_key, const DvParams& p);
+
+// "[:dv ...]" taking the firmware from `held` to `wanted`: a token for each
+// value that differs, "" if none do. A value [:dv] would not accept can only
+// be reached by selecting the voice again; if `wanted` needs one, it is left
+// out and *needs_voice (when not null) is set, and the caller should send the
+// voice command and ask again from dv_defaults(). From dv_defaults() this
+// matches dv_command(), less any slider whose value is the default anyway.
+std::string dv_change_command(const DvValues& held, const DvValues& wanted, bool* needs_voice);
+
 // Square brackets are dropped (space-replaced, since the firmware ignores
 // them but "[:" would otherwise be misparsed as a command) and isolated
 // parentheses -- "(" or ")" not hugging a word -- are dropped too (spoken

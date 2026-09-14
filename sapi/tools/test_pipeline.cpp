@@ -87,5 +87,43 @@ int wmain() {
         for (int i = 0; i < 30; ++i) faces += L"\U0001F600";
         for (const auto& p : split_for_firmware(faces, 10, 10)) assert((p.end - p.begin) % 2 == 0);
     }
+
+    // Design Voice state: what the firmware holds, and the way back from a
+    // change (DESIGN.md s24).
+    {
+        const dtc01::DvValues paul = dtc01::dv_defaults("paul");
+        assert(paul.value[0] == 120);  // ap
+        const dtc01::DvValues same = dtc01::dv_values("paul", dtc01::DvParams{});
+        for (int i = 0; i < 9; ++i) assert(same.value[i] == paul.value[i]);
+        bool needs_voice = true;
+        assert(dtc01::dv_change_command(paul, same, &needs_voice).empty() && !needs_voice);
+
+        // Pitch up -- a capital letter -- then back to the voice's own pitch.
+        dtc01::DvParams up;
+        up.pitch = 80;
+        const dtc01::DvValues high = dtc01::dv_values("paul", up);
+        assert(dtc01::dv_change_command(paul, high, nullptr) == "[:dv ap 228]");
+        assert(dtc01::dv_change_command(high, paul, &needs_voice) == "[:dv ap 120]" && !needs_voice);
+
+        // Only what differs is sent, and from the defaults it agrees with
+        // dv_command.
+        dtc01::DvParams both = up;
+        both.head_size = 70;
+        const dtc01::DvValues tuned = dtc01::dv_values("paul", both);
+        assert(dtc01::dv_change_command(high, tuned, nullptr) == "[:dv hs 140]");
+        assert(dtc01::dv_change_command(paul, tuned, nullptr) == dtc01::dv_command("paul", both));
+
+        // Kit's default pitch (306) is above what [:dv ap] accepts (300):
+        // raising it sends nothing rather than lowering it to 300, lowering it
+        // works, and only selecting the voice again gets 306 back.
+        const dtc01::DvValues kit = dtc01::dv_defaults("kit");
+        assert(kit.value[0] == 306);
+        assert(dtc01::dv_change_command(kit, dtc01::dv_values("kit", up), nullptr).empty());
+        dtc01::DvParams down;
+        down.pitch = 20;
+        const dtc01::DvValues kit_low = dtc01::dv_values("kit", down);
+        assert(dtc01::dv_change_command(kit, kit_low, nullptr) == "[:dv ap 140]");
+        assert(dtc01::dv_change_command(kit_low, kit, &needs_voice).empty() && needs_voice);
+    }
     return 0;
 }

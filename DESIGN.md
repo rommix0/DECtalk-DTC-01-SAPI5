@@ -1744,6 +1744,67 @@ compute here) plus the host's audio device.
 hysteresis rules for its oracle; it already could not run in this repository,
 which no longer carries the Python emulator it drives.
 
+## 24. Pitch from SAPI5 hosts, and who controls rate, pitch and volume (2026-09-14)
+
+Report: NVDA could not change DTC-01's pitch — neither its pitch setting nor
+the raised pitch it uses to read capital letters.
+
+**Cause.** SAPI5 has no pitch call. Hosts send pitch as markup,
+`<pitch absmiddle="N">`, which SAPI hands the engine as each fragment's
+`State.PitchAdj.MiddleAdj`. `Speak()` read `RateAdj` and `Volume` from the
+fragment state but never `PitchAdj`.
+
+**What NVDA sends** (`source/synthDrivers/sapi5.py`, `speech/commands.py`):
+every Speak call carries `<pitch absmiddle="percent // 2 - 25">`, so its 0–100
+setting arrives as −25..+25; a capital letter carries
+`(percent + capPitchChange) // 2 - 25`, which is +15 at the defaults and can
+reach +40. Driven through the real SpVoice (`sapi_xml_probe`), SAPI passes
+those values on unclamped — 25 and 40 arrive as 25 and 40 — whatever the
+−10..+10 convention suggests.
+
+**Mapping.** Pitch slider = 50 + 2 × MiddleAdj, clamped to 0..100, then the
+voice's own scale (`scale_from_default`): 50 is the voice's own average pitch,
+0 and 100 the lowest and highest the firmware accepts (`[:dv ap]` 30 and 300).
+NVDA's pitch setting therefore lands exactly on the voice's Pitch slider.
+Through SAPI on Paul: −10 → 100 Hz, 0 → 130 Hz, +10 → 200 Hz, +25 → 303 Hz;
+NVDA's capital letter (+15) → about 240 Hz, with the text after it back at
+130 Hz.
+
+**The way back has to be sent.** The firmware keeps a `[:dv]` value until the
+voice is selected again — after `[:dv ap 200]`, a line with no command still
+came out at 208 Hz — and the old prefix simply left out any slider at 50, so
+after a capital letter everything would have stayed high. The engine now
+tracks the nine Design Voice values the firmware holds through a `Speak()`
+call (`dv_values`, `dv_change_command`) and sends exactly what differs,
+including a voice's own default on the way back. Re-sending a default is not
+bit-identical to sending nothing (the firmware spends time parsing it), so
+nothing is sent when nothing changed: without pitch markup the output is
+byte-identical to 1.1.0 (`compare_renders.py`, 54/54). Kit is the exception:
+her default average pitch is 306, above the 300 that `[:dv ap]` accepts
+(sending 306 gets 300, measured), so raising her pitch sends nothing, and
+coming back to her own pitch selects her voice again.
+
+**"Allow SAPI5 apps to control rate, pitch and volume"**, a configuration
+utility check box (HKCU `AppControl`, on by default). Ticked, the host's rate
+(`SetRate` plus `<rate>`), volume (`SetVolume` × `<volume>`) and pitch (as
+above) are used, and the utility's Rate %, Volume dB and per-voice Pitch
+sliders are disabled. Unticked, the host's rate, volume and pitch are all
+ignored: rate is 180 wpm × Rate %, volume is Volume dB below full, and pitch
+is the voice's Pitch slider. Rate boost applies either way. Before this,
+Rate % and Volume dB scaled the host's values, and the Pitch slider was the
+only pitch there was.
+
+**Verification.** `test_pitch`, both firmwares, one `Speak()` call through the
+real engine: +15 raises F0 from 130 to 238 Hz and the next fragment is back at
+130; −10 lowers it; volume 50 halves the RMS; rate +5 shortens the speech by
+about 30 %. Unticked, the fragments come out alike and the voice's Pitch
+slider (80) raises the voice instead. Kit through SAPI:
+raising her pitch sends nothing, lowering it (slider 20, `[:dv ap 140]`) takes
+her from about 330 Hz to 165 Hz, and coming back sends `[:nk]`. The dialog was
+driven by script through the new check box: ticked by default, the three
+sliders disabled and skipped in tab order, the saved value, and Reset all
+settings.
+
 **Why it surfaced now:** nothing here is new — the held-sample behaviour and
 the splitter predate v1.8 support. Making v1.8 selectable in the settings
 panel is what made it reachable, and it is the same lesson as §21: the

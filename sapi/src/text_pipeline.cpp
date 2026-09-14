@@ -170,6 +170,55 @@ std::string dv_command(const std::string& voice_key, const DvParams& p) {
     return "[:dv" + out + "]";
 }
 
+namespace {
+
+// dv_command's token order, which DvValues follows.
+constexpr const char* kDvOrder[9] = {"ap", "pr", "hs", "br", "ri", "sm", "g5", "la", "as"};
+
+}  // namespace
+
+DvValues dv_defaults(const std::string& voice_key) {
+    DvValues out{};
+    for (int i = 0; i < 9; ++i) {
+        int lo = 0, hi = 0;
+        voice_param(voice_key, kDvOrder[i], &out.value[i], &lo, &hi);
+    }
+    return out;
+}
+
+DvValues dv_values(const std::string& voice_key, const DvParams& p) {
+    const int sliders[9] = {p.pitch, p.inflection, p.head_size, p.breathiness, p.richness,
+                            p.smoothness, p.loudness, p.laryngealization, p.assertiveness};
+    DvValues out = dv_defaults(voice_key);
+    for (int i = 0; i < 9; ++i) {
+        if (sliders[i] == 50) continue;
+        const int scaled = scale_from_default(voice_key, kDvOrder[i], sliders[i]);
+        if (scaled != out.value[i]) {
+            out.value[i] = clamp(kDvOrder[i], scaled);
+        }
+    }
+    return out;
+}
+
+std::string dv_change_command(const DvValues& held, const DvValues& wanted, bool* needs_voice) {
+    if (needs_voice) *needs_voice = false;
+    std::string out;
+    for (int i = 0; i < 9; ++i) {
+        const int v = wanted.value[i];
+        if (v == held.value[i]) continue;
+        if (clamp(kDvOrder[i], v) != v) {
+            if (needs_voice) *needs_voice = true;
+            continue;
+        }
+        out += " ";
+        out += kDvOrder[i];
+        out += " ";
+        out += std::to_string(v);
+    }
+    if (out.empty()) return "";
+    return "[:dv" + out + "]";
+}
+
 std::string sanitize_text(const std::string& utf8) {
     std::string text = utf8;
     for (char& ch : text) {
