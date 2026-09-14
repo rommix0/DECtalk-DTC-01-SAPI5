@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -30,5 +31,38 @@ constexpr int kRateBoosterSampleRate = 10000;
 //   - factor is clamped to at most 6.0, matching RateBooster.speed's own
 //     `max(1.0, min(6.0, value))` clamp in ratebooster.py.
 std::vector<int16_t> time_compress(const std::vector<int16_t>& in, double factor);
+
+// Streaming form of time_compress(), for audio that arrives as it is
+// synthesized: output is released as soon as no later input can change it
+// (about 30 ms behind the input), rather than after the whole utterance.
+// Everything push() and finish() hand back, concatenated, is identical to
+// time_compress() over the concatenated input -- time_compress() remains the
+// reference test_ratebooster.cpp holds this to.
+class TimeCompressor {
+public:
+    explicit TimeCompressor(double factor);
+
+    // False when the factor makes this an exact passthrough.
+    bool active() const { return active_; }
+
+    // Appends `count` input samples, and appends any final output to `out`.
+    void push(const int16_t* samples, size_t count, std::vector<int16_t>& out);
+
+    // Ends the stream: appends the rest of the output to `out`, then resets
+    // so the next push() starts a new stream at the same factor.
+    void finish(std::vector<int16_t>& out);
+
+private:
+    void run_frames(bool final, std::vector<int16_t>& out);
+
+    bool active_ = false;
+    double hop_ = 0.0;            // analysis hop, in input samples
+    std::vector<int16_t> in_;     // input from stream index base_ onward
+    size_t base_ = 0;
+    size_t total_ = 0;            // input samples pushed this stream
+    std::vector<int16_t> tail_;   // last overlap of output, still to be crossfaded
+    double cursor_ = 0.0;         // nominal source position of the next frame
+    bool started_ = false;        // the first frame has been taken
+};
 
 }  // namespace dtc01

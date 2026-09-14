@@ -98,6 +98,23 @@ std::unique_ptr<Machine> Machine::create(const std::vector<uint8_t>& main_img,
         return nullptr;  // ~Machine() frees module_ (== mod) exactly once
     }
 
+    // Optional exports: a core DLL from before them still speaks, so a miss
+    // here is not a failure. Without dtc01_input_idle, input_idle() falls back
+    // to is_idle(); without the state exports the machine cannot rewind (see
+    // save_state()).
+    m->fn_input_idle_ = reinterpret_cast<IsIdle_t>(GetProcAddress(mod, "dtc01_input_idle"));
+    m->fn_state_size_ = reinterpret_cast<StateSize_t>(GetProcAddress(mod, "dtc01_state_size"));
+    m->fn_state_save_ = reinterpret_cast<StateSave_t>(GetProcAddress(mod, "dtc01_state_save"));
+    m->fn_state_restore_ =
+        reinterpret_cast<StateRestore_t>(GetProcAddress(mod, "dtc01_state_restore"));
+    if (!m->fn_state_size_ || !m->fn_state_save_ || !m->fn_state_restore_) {
+        m->fn_state_size_ = nullptr;
+        m->fn_state_save_ = nullptr;
+        m->fn_state_restore_ = nullptr;
+        DECTALK_LOG("dtc01_core: core DLL has no state snapshots; cancelled speech will "
+                    "re-run the boot");
+    }
+
     // Keep our own copies alive for the Machine's lifetime -- see the
     // header's comment on why, even though dtc01_create() itself copies
     // both buffers before returning (native/dtc01.c: memcpy for the main
@@ -142,12 +159,40 @@ bool Machine::is_idle() {
     return fn_is_idle_(handle_) != 0;
 }
 
+bool Machine::input_idle() {
+    return (fn_input_idle_ ? fn_input_idle_(handle_) : fn_is_idle_(handle_)) != 0;
+}
+
 void Machine::set_volume(int percent) {
     fn_set_volume_(handle_, percent);
 }
 
 void Machine::reset() {
     fn_reset_(handle_);
+}
+
+bool Machine::save_state(std::vector<uint8_t>& out) {
+    out.clear();
+    if (!fn_state_save_) {
+        return false;
+    }
+    const int size = fn_state_size_();
+    if (size <= 0) {
+        return false;
+    }
+    out.resize(static_cast<size_t>(size));
+    if (fn_state_save_(handle_, out.data(), size) != size) {
+        out.clear();
+        return false;
+    }
+    return true;
+}
+
+bool Machine::restore_state(const std::vector<uint8_t>& state) {
+    if (!fn_state_restore_ || state.empty()) {
+        return false;
+    }
+    return fn_state_restore_(handle_, state.data(), static_cast<int>(state.size())) == 1;
 }
 
 void Machine::consume_boot_announcement() {

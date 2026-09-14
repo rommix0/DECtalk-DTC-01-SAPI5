@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cwctype>
 #include <regex>
 
 namespace dtc01 {
@@ -199,6 +200,85 @@ std::string flush_suffix(const std::string& sanitized) {
         return "\r";
     }
     return ",\r";
+}
+
+namespace {
+
+// UTF-8 bytes for the code point starting at text[i], and how many UTF-16
+// units it spans -- matching WideCharToMultiByte(CP_UTF8), which turns an
+// unpaired surrogate into U+FFFD (three bytes).
+size_t utf8_bytes_at(const std::wstring& text, size_t i, size_t* units) {
+    const wchar_t c = text[i];
+    *units = 1;
+    if (c < 0x80) return 1;
+    if (c < 0x800) return 2;
+    if (c >= 0xD800 && c <= 0xDBFF && i + 1 < text.size() &&
+        text[i + 1] >= 0xDC00 && text[i + 1] <= 0xDFFF) {
+        *units = 2;
+        return 4;
+    }
+    return 3;
+}
+
+bool is_space(wchar_t c) {
+    return iswspace(c) != 0;
+}
+
+}  // namespace
+
+std::vector<TextPiece> split_for_firmware(const std::wstring& text, size_t first_budget,
+                                          size_t budget) {
+    std::vector<TextPiece> pieces;
+    const size_t n = text.size();
+    size_t pos = 0;
+    for (;;) {
+        while (pos < n && is_space(text[pos])) ++pos;
+        if (pos >= n) break;
+
+        // The furthest end whose text fits this piece's budget. At least one
+        // code point is always taken, so a budget can never stall the loop.
+        const size_t limit = pieces.empty() ? first_budget : budget;
+        size_t fit = pos;
+        size_t bytes = 0;
+        while (fit < n) {
+            size_t units = 0;
+            const size_t b = utf8_bytes_at(text, fit, &units);
+            if (bytes + b > limit && fit > pos) break;
+            bytes += b;
+            fit += units;
+            if (bytes >= limit) break;
+        }
+
+        size_t rest = fit;
+        while (rest < n && is_space(text[rest])) ++rest;
+        if (rest >= n) {
+            size_t end = fit;
+            while (end > pos && is_space(text[end - 1])) --end;
+            pieces.push_back({pos, end});
+            break;
+        }
+
+        // Break at the first space of a run, ranked by what precedes it: a
+        // sentence ender, a clause mark, or anything else. Rightmost wins
+        // within the best rank present.
+        size_t best[3] = {0, 0, 0};
+        for (size_t k = pos + 1; k <= fit && k < n; ++k) {
+            if (!is_space(text[k]) || is_space(text[k - 1])) continue;
+            const wchar_t before = text[k - 1];
+            int rank = 2;
+            if (before == L'.' || before == L'!' || before == L'?') {
+                rank = 0;
+            } else if (before == L',' || before == L';' || before == L':') {
+                rank = 1;
+            }
+            best[rank] = k;
+        }
+        size_t end = best[0] ? best[0] : best[1] ? best[1] : best[2];
+        if (!end) end = fit;  // no whitespace within reach: cut the word
+        pieces.push_back({pos, end});
+        pos = end;
+    }
+    return pieces;
 }
 
 }  // namespace dtc01

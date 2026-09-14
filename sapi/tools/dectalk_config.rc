@@ -27,6 +27,11 @@ BEGIN
     LTEXT           "&Voice:", -1, 7, 9, 50, 8
     COMBOBOX        IDC_VOICE, 60, 7, 180, 160, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
 
+    // A check box is its own label, so it needs no static in front of it.
+    // It sits straight after the Voice box in tab order because it changes
+    // what the voice sliders that follow it act on.
+    AUTOCHECKBOX    "Apply settin&gs to all voices", IDC_APPLY_ALL, 250, 8, 220, 10, WS_TABSTOP
+
     GROUPBOX        "Voice settings", -1, 7, 24, 230, 330
 
     LTEXT           "&Pitch:", -1, 14, 36, 120, 8

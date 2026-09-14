@@ -54,11 +54,52 @@ int wmain() {
     assert(dectalk_config::apply_global_firmware(L"v20"));
     assert(load_global().default_firmware == "v20");
 
+    // "Apply settings to all voices", on the case that asked for it: Perfect
+    // Paul tuned -- assertiveness 60, richness 0, breathiness 0, loudness 100
+    // -- and then every other voice given the same adjustments.
+    reset_all();
+    assert(dectalk_config::apply_setting("paul", "v20", IDC_ASSERTIVENESS, 60));
+    assert(dectalk_config::apply_setting("paul", "v20", IDC_RICHNESS, 0));
+    assert(dectalk_config::apply_setting("paul", "v20", IDC_BREATHINESS, 0));
+    assert(dectalk_config::apply_setting("paul", "v20", IDC_LOUDNESS, 100));
+    assert(dectalk_config::copy_voice_to_all_voices("paul", "v20"));
+    for (const dtc01::VoiceDef& v : dtc01::VOICES) {
+        const VoiceSettings s = load_voice(v.key, v.firmware);
+        assert(s.assertiveness == 60 && s.richness == 0 && s.breathiness == 0 && s.loudness == 100);
+        assert(s.pitch == 50 && s.inflection == 50 && s.head_size == 50 &&
+               s.smoothness == 50 && s.laryngealization == 50);
+    }
+
+    // While the box is ticked, one slider change reaches every voice...
+    assert(dectalk_config::apply_setting_to_all_voices(IDC_PITCH, 35));
+    for (const dtc01::VoiceDef& v : dtc01::VOICES) {
+        assert(load_voice(v.key, v.firmware).pitch == 35);
+    }
+    // ...and a control that isn't a voice slider writes nothing anywhere.
+    assert(!dectalk_config::apply_setting_to_all_voices(IDC_RATE, 150));
+    assert(load_global().rate_percent == 100);
+
+    // "Reset all voices" puts every voice back to its own defaults.
+    dectalk_config::reset_all_voices();
+    for (const dtc01::VoiceDef& v : dtc01::VOICES) {
+        const VoiceSettings s = load_voice(v.key, v.firmware);
+        assert(s.pitch == 50 && s.assertiveness == 50 && s.richness == 50 && s.loudness == 50);
+    }
+
+    // The tick box persists, and reset_all() clears it with everything else.
+    assert(!load_apply_to_all_voices());
+    assert(dectalk_config::set_apply_to_all_voices(true));
+    assert(load_apply_to_all_voices());
+    assert(dectalk_config::set_apply_to_all_voices(false));
+    assert(!load_apply_to_all_voices());
+    assert(dectalk_config::set_apply_to_all_voices(true));
+
     // Clean up every HKCU value this test (and dectalk_config.cpp) manage,
     // so a developer's own settings are left exactly as they were.
     reset_all();
     assert(load_voice("paul", "v20").head_size == 50);
     assert(load_global().rate_percent == 100);
+    assert(!load_apply_to_all_voices());
 
     return 0;
 }

@@ -4,6 +4,7 @@
  * and the FIFO/latch logic between the two CPUs into one runnable system,
  * replicating MAME's dectalk_state (DESIGN.md sections 1, 3, 4, 5).
  */
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -60,6 +61,10 @@ typedef char dtc01_clock_ratios_are_exact[
 
 struct dtc01 {
     uint8_t  rom[ROM_SIZE];
+    uint64_t rom_hash;  /* rom[] + DSP program; checked by dtc01_state_restore */
+
+    /* Everything from here up to m68k_ctx is what a state snapshot copies
+     * (see STATE_FIRST/STATE_END), so keep constant data above this line. */
     uint8_t  ram[RAM_SIZE];
     uint8_t  nvram[0x100];
     int      led_state;
@@ -493,6 +498,19 @@ static void machine_soft_state_init(dtc01_t *m)
     m->unmapped = 0;
 }
 
+/* FNV-1a, 64-bit. Only an identity check for snapshots: it has to tell ROM
+ * sets and builds apart, not resist anyone. */
+#define FNV_OFFSET 14695981039346656037ull
+static uint64_t fnv1a(uint64_t h, const uint8_t *p, size_t n)
+{
+    size_t i;
+    for (i = 0; i < n; i++) {
+        h ^= p[i];
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+
 DTC01_API dtc01_t *dtc01_create(const uint8_t *main_rom, int main_rom_len,
                                 const uint16_t *dsp_rom, int dsp_rom_words)
 {
@@ -508,6 +526,8 @@ DTC01_API dtc01_t *dtc01_create(const uint8_t *main_rom, int main_rom_len,
     if (!m->m68k_ctx) { free(m); return NULL; }
 
     memcpy(m->rom, main_rom, ROM_SIZE);
+    m->rom_hash = fnv1a(fnv1a(FNV_OFFSET, main_rom, ROM_SIZE), (const uint8_t *)dsp_rom,
+                        (size_t)dsp_rom_words * sizeof(uint16_t));
     machine_soft_state_init(m);
     /* Set outside machine_soft_state_init so dtc01_reset() doesn't discard
      * the user's volume along with the machine state. */
@@ -691,6 +711,13 @@ DTC01_API int dtc01_is_idle(const dtc01_t *m)
             m->pending_count == 0 && duart_rx_b_pending(&m->duart) == 0) ? 1 : 0;
 }
 
+DTC01_API int dtc01_input_idle(const dtc01_t *m)
+{
+    if (!m) return 1;
+    return (m->infifo_count == 0 && m->pending_count == 0 &&
+            duart_rx_b_pending(&m->duart) == 0) ? 1 : 0;
+}
+
 /* The firmware parks the DSP in reset between utterances, so this is its own
  * answer to "am I still synthesizing?" -- unlike an absence of audio, which
  * is also true during a pause inside an utterance. */
@@ -738,7 +765,102 @@ DTC01_API void dtc01_debug_duart(const dtc01_t *m, int *running, int *remaining,
     if (clock_hz)  *clock_hz  = m->duart.counter_clock_cache;
 }
 
+/* ---- state snapshots -------------------------------------------------- */
+/* The dynamic state is the contiguous run of members from ram up to (not
+ * including) m68k_ctx; Musashi's CPU context follows it in the buffer. The ROM
+ * image and rom_hash sit before that run and are never copied. */
+#define STATE_FIRST offsetof(struct dtc01, ram)
+#define STATE_END   offsetof(struct dtc01, m68k_ctx)
+#define STATE_MAGIC 0x53435444u /* "DTCS" */
+
+typedef struct {
+    uint32_t magic;
+    uint32_t state_bytes;
+    uint32_t cpu_bytes;
+    uint32_t reserved;
+    uint64_t rom_hash;
+    uint64_t image;
+} state_header_t;
+
+/* This build, loaded at this address. Musashi's context holds pointers to
+ * static tables and callbacks inside this image, so a snapshot means nothing
+ * to a different build or to this one loaded elsewhere. */
+static uint64_t image_identity(void)
+{
+    static const char stamp[] = __DATE__ " " __TIME__;
+    const uintptr_t here = (uintptr_t)&image_identity;
+    return fnv1a(fnv1a(FNV_OFFSET, (const uint8_t *)stamp, sizeof stamp),
+                 (const uint8_t *)&here, sizeof here);
+}
+
+DTC01_API int dtc01_state_size(void)
+{
+    return (int)(sizeof(state_header_t) + (STATE_END - STATE_FIRST) + m68k_context_size());
+}
+
+DTC01_API int dtc01_state_save(dtc01_t *m, uint8_t *buf, int len)
+{
+    state_header_t h;
+    const size_t state_bytes = STATE_END - STATE_FIRST;
+    const int size = dtc01_state_size();
+    if (!m || !buf || len < size) return 0;
+
+    /* An active machine's CPU state lives in Musashi's globals; m68k_ctx only
+     * catches up when another machine is swapped in. */
+    if (g_active == m) m68k_get_context(m->m68k_ctx);
+
+    h.magic = STATE_MAGIC;
+    h.state_bytes = (uint32_t)state_bytes;
+    h.cpu_bytes = m68k_context_size();
+    h.reserved = 0;
+    h.rom_hash = m->rom_hash;
+    h.image = image_identity();
+    memcpy(buf, &h, sizeof h);
+    memcpy(buf + sizeof h, (const uint8_t *)m + STATE_FIRST, state_bytes);
+    memcpy(buf + sizeof h + state_bytes, m->m68k_ctx, h.cpu_bytes);
+    return size;
+}
+
+DTC01_API int dtc01_state_restore(dtc01_t *m, const uint8_t *buf, int len)
+{
+    state_header_t h;
+    const size_t state_bytes = STATE_END - STATE_FIRST;
+    int volume, underruns, ticks;
+    if (!m || !buf || len != dtc01_state_size()) return 0;
+
+    memcpy(&h, buf, sizeof h);
+    if (h.magic != STATE_MAGIC || h.state_bytes != state_bytes ||
+        h.cpu_bytes != m68k_context_size() || h.rom_hash != m->rom_hash ||
+        h.image != image_identity())
+        return 0;
+
+    /* Kept from the target: the volume is the caller's setting, and the
+     * counters measure this machine's whole life. */
+    volume = m->volume;
+    underruns = m->outfifo_underruns;
+    ticks = m->dac_ticks;
+
+    memcpy((uint8_t *)m + STATE_FIRST, buf + sizeof h, state_bytes);
+    memcpy(m->m68k_ctx, buf + sizeof h + state_bytes, h.cpu_bytes);
+
+    /* The snapshot may come from another machine: point the devices back at
+     * this one. Their callbacks are the same functions for every machine. */
+    m->dsp.owner = m;
+    m->duart.owner = m;
+    m->volume = volume;
+    m->outfifo_underruns = underruns;
+    m->dac_ticks = ticks;
+
+    /* As activate(): if this machine is the active one, Musashi's globals
+     * must take the restored CPU state now rather than at the next swap. */
+    if (g_active == m) {
+        m68k_set_context(m->m68k_ctx);
+        m68k_set_irq((unsigned int)m->pending_irq);
+    }
+    return 1;
+}
+
 DTC01_API const char *dtc01_version(void)
 {
-    return "dtc01-native 1.0 (Musashi 4.60 68000 + TMS32010 + SCN2681)";
+    return "dtc01-native 1.1 (Musashi 4.60 68000 + TMS32010 + SCN2681)";
 }

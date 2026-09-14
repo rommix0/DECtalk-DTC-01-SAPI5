@@ -80,6 +80,28 @@ Line joining during say-all is automatic: wrapped lines are reassembled and
 split on real sentence boundaries, so a hard wrap mid-sentence doesn't
 produce a pause.
 
+### Configuration utility
+
+**DECtalk configuration** (Start menu, or the optional desktop icon) holds
+the SAPI5 settings. Voice settings belong to the voice chosen in the Voice
+box. Tick **Apply settings to all voices** to give every voice, on both
+firmware versions, the chosen voice's settings; while it stays ticked, each
+change applies to all voices and the reset button becomes **Reset all
+voices**. Untick it to go back to adjusting one voice at a time — the voices
+keep what they have.
+
+### Responsiveness
+
+Speech starts as soon as the firmware makes its first sound. The silence the
+emulated unit produces before and after an utterance is not sent to the
+screen reader, an interrupted utterance is abandoned by rewinding the
+emulator to its booted state rather than rebooting it, and a voice change
+reuses that booted state. Moving quickly down a list, the delay from a key
+press to hearing the next item fell from about 680 ms to about 40 ms, on both
+firmware versions; see [DESIGN.md §23](DESIGN.md) for the measurements. Long
+text is fed to the firmware in pieces it accepts, so long sentences are
+spoken rather than dropped.
+
 ## Building
 
 Needs Microsoft's Visual Studio 2022 (Build Tools are enough) for building the SAPI wrapper and the DTC-01 engine for Windows, and Inno Setup 6 for compiling the installation program.

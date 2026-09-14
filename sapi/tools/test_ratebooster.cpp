@@ -1,4 +1,5 @@
 #include "ratebooster.hpp"
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdio>
@@ -105,6 +106,47 @@ int wmain() {
     std::vector<int16_t> negFactorOut = dtc01::time_compress(tone, -1.0);
     assert(negFactorOut == tone);
     printf("factor<=0 (0.0, -1.0): exact passthrough, no crash\n");
+
+    // Streaming: TimeCompressor must reproduce time_compress() exactly, however
+    // the input is chunked -- the engine feeds it as the firmware synthesizes.
+    // The signal gives the correlation search something different to latch
+    // onto at every frame: two tones plus a deterministic noise component.
+    std::vector<int16_t> speechy(37123);
+    uint32_t lcg = 12345;
+    for (size_t i = 0; i < speechy.size(); ++i) {
+        lcg = lcg * 1664525u + 1013904223u;
+        double t = static_cast<double>(i) / dtc01::kRateBoosterSampleRate;
+        double v = 5000.0 * std::sin(2.0 * kPi * 140.0 * t) +
+                   2500.0 * std::sin(2.0 * kPi * 910.0 * t) +
+                   (static_cast<int>(lcg >> 20) - 2048);
+        speechy[i] = static_cast<int16_t>(std::lround(v));
+    }
+    for (double factor : {0.5, 1.0, 1.25, 2.0, 3.0, 6.0, 9.0}) {
+        for (size_t len : {speechy.size(), size_t{0}, size_t{199}, size_t{200}, size_t{239},
+                           size_t{241}, size_t{1000}}) {
+            const std::vector<int16_t> input(speechy.begin(), speechy.begin() + len);
+            const std::vector<int16_t> batch = dtc01::time_compress(input, factor);
+            for (size_t chunk : {size_t{1}, size_t{37}, size_t{250}, size_t{1000}, len}) {
+                if (chunk == 0) continue;
+                dtc01::TimeCompressor stream(factor);
+                std::vector<int16_t> got;
+                for (size_t off = 0; off < len; off += chunk) {
+                    stream.push(input.data() + off, std::min(chunk, len - off), got);
+                }
+                stream.finish(got);
+                assert(got == batch);
+            }
+        }
+    }
+    // finish() resets: a second stream through the same object matches too.
+    dtc01::TimeCompressor reused(2.0);
+    std::vector<int16_t> firstRun, secondRun;
+    reused.push(speechy.data(), 5000, firstRun);
+    reused.finish(firstRun);
+    reused.push(speechy.data(), 5000, secondRun);
+    reused.finish(secondRun);
+    assert(firstRun == secondRun && !firstRun.empty());
+    printf("streaming: identical to time_compress for every factor, length and chunk size\n");
 
     printf("all assertions passed\n");
     return 0;
