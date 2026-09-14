@@ -98,6 +98,10 @@ like the utility's Pitch slider: 50 is the voice's own pitch. Untick the box
 to set those three in the utility instead; the program's rate, pitch and
 volume are then ignored. Rate boost works either way.
 
+**Diagnostic log for bug reports** is **Off** unless you choose **On**, which
+saves the text of everything DECtalk speaks to a log file; see
+[Diagnostic log](#diagnostic-log).
+
 ### Responsiveness
 
 Speech starts as soon as the firmware makes its first sound. The silence the
@@ -112,16 +116,22 @@ spoken rather than dropped.
 
 ### Diagnostic log
 
-The voices can keep a diagnostic log for bug reports. It records the text
-DECtalk speaks, so it is off unless you turn it on. To turn it on, run this in
-a Command Prompt and restart your screen reader:
+The voices can keep a diagnostic log for bug reports. It saves the text
+DECtalk speaks, so it is off unless you turn it on: in the configuration
+utility, set **Diagnostic log for bug reports** to **On**. Logging starts with
+the next thing DECtalk says, without restarting your screen reader, and stops
+the same way when you set it back to **Off**. **Reset all settings** turns it
+off too.
+
+The log is written to `%LOCALAPPDATA%\DECtalkDTC01\dectalk-sapi.log`. The
+setting is the registry value `HKCU\Software\DECtalkDTC01\Logging` — 1 is on,
+0 or no value is off — so a Command Prompt can turn it on:
 
 ```
 reg add HKCU\Software\DECtalkDTC01 /v Logging /t REG_DWORD /d 1 /f
 ```
 
-The log is written to `%LOCALAPPDATA%\DECtalkDTC01\dectalk-sapi.log`. To turn
-it off again, delete the value:
+and off again:
 
 ```
 reg delete HKCU\Software\DECtalkDTC01 /v Logging /f
