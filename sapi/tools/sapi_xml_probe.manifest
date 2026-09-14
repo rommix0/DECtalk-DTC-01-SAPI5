@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Registration-free COM for sapi_xml_probe.exe: the engine class resolves to
+     the DectalkDtc01SAPI.dll beside the exe, never to an installed copy. -->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <file name="DectalkDtc01SAPI.dll">
+    <comClass clsid="{E877CE12-F153-40DF-AEAC-2AFA4D4A3DE8}" threadingModel="Both" />
+  </file>
+</assembly>

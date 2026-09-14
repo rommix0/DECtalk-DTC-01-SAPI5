@@ -105,4 +105,11 @@ inline void reset_all_voices() {
     return dectalk::settings::write_global_int(dectalk::settings::APPLY_TO_ALL_VOICES, on ? 1 : 0);
 }
 
+// "Allow SAPI5 apps to control rate, pitch and volume". Unlike the tick box
+// above, the engine reads this one (GlobalSettings::app_control) on every
+// utterance.
+[[nodiscard]] inline bool set_app_control(bool on) {
+    return dectalk::settings::write_global_int(dectalk::settings::APP_CONTROL, on ? 1 : 0);
+}
+
 }  // namespace dectalk_config

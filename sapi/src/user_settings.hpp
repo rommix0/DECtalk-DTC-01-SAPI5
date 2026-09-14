@@ -24,9 +24,9 @@ inline constexpr const wchar_t* ROOT_KEY   = L"Software\\DECtalkDTC01";
 inline constexpr const wchar_t* VOICES_KEY = L"Software\\DECtalkDTC01\\Voices";
 
 // ---------------------------------------------------------------------------
-// Global settings: apply on top of whatever the SAPI client asks for.
-// RateBoost is a percent of extra time-compression on top of RatePercent;
-// C2/C3 are the ones that interpret it against the firmware's own rate range.
+// Global settings. Rate and volume come from the SAPI client unless AppControl
+// is off, when RatePercent and VolumeDB decide them instead. RateBoost is a
+// percent of extra time-compression on top of either, and always applies.
 // ---------------------------------------------------------------------------
 
 inline constexpr int RATE_PERCENT_MIN = 25;
@@ -39,10 +39,18 @@ inline constexpr int RATE_BOOST_MIN   = 0;
 inline constexpr int RATE_BOOST_MAX   = 200;
 inline constexpr int RATE_BOOST_DEF   = 0;
 
+// "Allow SAPI5 apps to control rate, pitch and volume", on unless set to 0:
+// the rate, volume and pitch the host asks for -- through ISpVoice and markup
+// such as <pitch absmiddle> -- are what the engine uses. Off, the host's
+// requests are ignored, and RatePercent, VolumeDB and each voice's Pitch
+// slider decide instead.
+inline constexpr const wchar_t* APP_CONTROL = L"AppControl";
+
 struct GlobalSettings {
     int rate_percent = RATE_PERCENT_DEF;
     int volume_db = VOLUME_DB_DEF;
     int rate_boost = RATE_BOOST_DEF;
+    bool app_control = true;
     std::string default_firmware = "v20";
 };
 
@@ -130,6 +138,7 @@ namespace detail {
     s.rate_percent = detail::get_int(key, L"RatePercent", RATE_PERCENT_DEF, RATE_PERCENT_MIN, RATE_PERCENT_MAX);
     s.volume_db = detail::get_int(key, L"VolumeDB", VOLUME_DB_DEF, VOLUME_DB_MIN, VOLUME_DB_MAX);
     s.rate_boost = detail::get_int(key, L"RateBoost", RATE_BOOST_DEF, RATE_BOOST_MIN, RATE_BOOST_MAX);
+    s.app_control = detail::get_int(key, APP_CONTROL, 1, 0, 1) != 0;
     const std::string fw = detail::get_string(key, L"DefaultFirmware", "v20");
     s.default_firmware = (fw == "v20" || fw == "v18") ? fw : "v20";
     RegCloseKey(key);
@@ -256,6 +265,7 @@ inline void reset_all() {
         RegDeleteValueW(key, L"RateBoost");
         RegDeleteValueW(key, L"DefaultFirmware");
         RegDeleteValueW(key, APPLY_TO_ALL_VOICES);
+        RegDeleteValueW(key, APP_CONTROL);
         RegCloseKey(key);
     }
     for (const dtc01::VoiceDef& v : dtc01::VOICES) {

@@ -256,20 +256,24 @@ void emit_word_boundaries(ISpTTSEngineSite* site, const std::wstring& raw,
     }
 }
 
-// The host's volume, the fragment's own and the VolumeDB setting, combined
-// into the 0..100 percent applied to the samples.
+// The 0..100 percent applied to the samples. While the host controls volume
+// (the default) that is the host's volume, ISpVoice::SetVolume, scaled by the
+// fragment's own from <volume> markup; with "Allow SAPI5 apps to control rate,
+// pitch and volume" unticked it is the configuration utility's VolumeDB as a
+// gain on full volume, and the host's requests are ignored.
 struct Loudness {
+    bool app_control = true;
     USHORT host = 100;   // re-read on SPVES_VOLUME
     ULONG fragment = 100;
     int volume_db = dectalk::settings::VOLUME_DB_DEF;
 
     [[nodiscard]] int percent() const
     {
-        // sapi_volume*frag.Volume/100 -> percent, then VolumeDB applied as a
-        // dB gain on top: 20*log10(percent_out/percent_in) = volume_db, i.e.
-        // percent_out = percent_in * 10^(volume_db/20). 0 dB is a no-op.
-        const int base = std::clamp<int>(static_cast<int>(host) * fragment / 100, 0, 100);
-        const double gained = base * std::pow(10.0, volume_db / 20.0);
+        if (app_control) {
+            return std::clamp<int>(static_cast<int>(host) * fragment / 100, 0, 100);
+        }
+        // 20*log10(percent/100) = volume_db; 0 dB is full volume.
+        const double gained = 100.0 * std::pow(10.0, volume_db / 20.0);
         return std::clamp(static_cast<int>(std::lround(gained)), 0, 100);
     }
 };
@@ -693,9 +697,18 @@ STDMETHODIMP DectalkTtsEngine::Speak(
         const bool want_sentence = (event_interest & SPFEI(SPEI_SENTENCE_BOUNDARY)) != 0;
         const bool want_bookmark = (event_interest & SPFEI(SPEI_TTS_BOOKMARK)) != 0;
 
+        // Rate, pitch and volume are the host's -- ISpVoice::SetRate and
+        // SetVolume, and markup such as <rate absspeed>, <volume level> and
+        // <pitch absmiddle>, which is how NVDA sends all three -- unless "Allow
+        // SAPI5 apps to control rate, pitch and volume" is unticked. Then the
+        // host's requests are ignored, and the configuration utility's
+        // RatePercent, VolumeDB and this voice's Pitch slider decide instead.
+        const bool app_control = global.app_control;
+
         long sapi_rate = 0;
         pOutputSite->GetRate(&sapi_rate);
         Loudness loudness;
+        loudness.app_control = app_control;
         loudness.volume_db = global.volume_db;
         pOutputSite->GetVolume(&loudness.host);
 
@@ -703,6 +716,12 @@ STDMETHODIMP DectalkTtsEngine::Speak(
         // utterance; a voice change forces a firmware pause. Starts unset so the
         // first spoken fragment always states the voice.
         std::string current_mnemonic;
+        // The Design Voice values the firmware holds once the voice is selected.
+        // A [:dv] value sticks until the voice is selected again, so each
+        // fragment sends only what differs from what the firmware holds --
+        // including the way back after a fragment whose pitch was raised.
+        const dtc01::DvValues voice_defaults = dtc01::dv_defaults(voice_key_);
+        dtc01::DvValues held = voice_defaults;
 
         SiteWriter out(pOutputSite, rate_boost_factor);
         bool aborted = false;
@@ -767,24 +786,51 @@ STDMETHODIMP DectalkTtsEngine::Speak(
                 const std::wstring text = dectalk::utils::string_to_wstring(dtc01::sanitize_text(
                     dectalk::utils::wstring_to_string(std::wstring(frag->pTextStart, frag->ulTextLen))));
 
-                // Per-fragment rate/volume ride on top of the stream values.
-                const int frag_rate = std::clamp<int>(
-                    static_cast<int>(sapi_rate) + frag->State.RateAdj, SAPI_RATE_MIN, SAPI_RATE_MAX);
-                // RatePercent (HKCU) scales the SAPI-derived wpm before
-                // rate_command's own clamp to [120, 350] (text_pipeline.cpp)
-                // has the final say -- 100% is a no-op, 200% doubles it.
-                const int wpm = static_cast<int>(
-                    std::lround(sapi_rate_to_wpm(frag_rate) * global.rate_percent / 100.0));
+                // Rate, volume and pitch: the host's, or the configuration
+                // utility's when app_control is off (see its comment above).
+                int wpm = 0;
+                dtc01::DvParams sliders = dvp;
+                if (app_control) {
+                    const int frag_rate = std::clamp<int>(
+                        static_cast<int>(sapi_rate) + frag->State.RateAdj, SAPI_RATE_MIN, SAPI_RATE_MAX);
+                    wpm = sapi_rate_to_wpm(frag_rate);
+                    // SAPI pitch is -10..+10 by convention; NVDA sends its pitch
+                    // setting as percent / 2 - 25, and more for capital letters.
+                    // Two slider steps per unit lands NVDA's setting on this
+                    // voice's own Pitch slider: 50 is the voice's own pitch, 0
+                    // and 100 the lowest and highest the firmware will make.
+                    constexpr int kPitchStepsPerUnit = 2;
+                    sliders.pitch = std::clamp(
+                        dectalk::settings::SLIDER_DEF +
+                            kPitchStepsPerUnit * static_cast<int>(frag->State.PitchAdj.MiddleAdj),
+                        dectalk::settings::SLIDER_MIN, dectalk::settings::SLIDER_MAX);
+                } else {
+                    // RatePercent of the firmware's default rate; rate_command()
+                    // clamps to its [120, 350].
+                    wpm = static_cast<int>(std::lround(DEFAULT_WPM * global.rate_percent / 100.0));
+                }
                 loudness.fragment = frag->State.Volume;
                 out.set_volume(loudness.percent());
 
+                const dtc01::DvValues wanted = dtc01::dv_values(voice_key_, sliders);
+                bool select_voice = current_mnemonic != mnemonic_;
+                bool needs_voice = false;
+                std::string dv = dtc01::dv_change_command(select_voice ? voice_defaults : held,
+                                                          wanted, &needs_voice);
+                if (needs_voice) {
+                    // A default [:dv] refuses (Kit's pitch, 306) comes back only
+                    // by selecting the voice again.
+                    select_voice = true;
+                    dv = dtc01::dv_change_command(voice_defaults, wanted, nullptr);
+                }
+
                 std::string prefix;
-                if (current_mnemonic != mnemonic_) {
+                if (select_voice) {
                     prefix += dtc01::voice_command(mnemonic_.c_str());
                     prefix += " ";
                 }
                 prefix += dtc01::rate_command(wpm);
-                prefix += dtc01::dv_command(voice_key_, dvp);
+                prefix += dv;
 
                 const size_t first_budget =
                     (prefix.size() + kFlushBytes + kMinPieceBytes <= kFirmwareLineBytes)
@@ -816,13 +862,16 @@ STDMETHODIMP DectalkTtsEngine::Speak(
                         fed = prefix;
                         prefix_sent = true;
                         current_mnemonic = mnemonic_;
+                        held = wanted;
                     }
                     fed += line;
                     fed += dtc01::flush_suffix(line);
 
                     DECTALK_LOG("DectalkTtsEngine: Speak voice=%s firmware=%s wpm=%d pitch=%d "
-                                "volume=%d fed=[%s]", voice_key_.c_str(), firmware_.c_str(), wpm,
-                                dvp.pitch, loudness.percent(), fed.c_str());
+                                "(host %ld) volume=%d fed=[%s]", voice_key_.c_str(),
+                                firmware_.c_str(), wpm, sliders.pitch,
+                                static_cast<long>(frag->State.PitchAdj.MiddleAdj),
+                                loudness.percent(), fed.c_str());
 
                     const ULONGLONG piece_start = out.bytes();
                     machine_->feed_text(fed);

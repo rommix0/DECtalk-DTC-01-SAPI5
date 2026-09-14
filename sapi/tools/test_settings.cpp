@@ -1,14 +1,21 @@
 // Exercises the HKCU settings model directly against the real
 // HKCU\Software\DECtalkDTC01 key (there is no registry sandbox available to
-// a command-line tool). That's acceptable because it's the app's own key and
-// the test cleans up after itself with reset_all() -- but it does mean a
-// developer who has hand-tuned settings under this key will have them wiped
-// by running this test.
+// a command-line tool). The settings already there are copied aside first and
+// put back when the test ends (settings_backup.hpp), so running it on a
+// machine that speaks with DECtalk keeps the settings made there.
 #include "user_settings.hpp"
+#include "settings_backup.hpp"
 #include <cassert>
+#include <cstdio>
 
 int wmain() {
     using namespace dectalk::settings;
+
+    const dectalk::test::SettingsBackup backup;
+    if (!backup.ok()) {
+        std::fputs("test_settings: could not back up HKCU\\Software\\DECtalkDTC01\n", stderr);
+        return 1;
+    }
 
     // Start from a clean slate so this test is not at the mercy of whatever
     // a previous run (or a real user) left behind.

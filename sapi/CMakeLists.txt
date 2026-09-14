@@ -45,6 +45,7 @@ add_dtc_tool(test_log advapi32)
 add_dtc_tool(dump_pipeline)
 add_dtc_tool(test_speech_shaper)
 add_dtc_tool(test_state_snapshot bcrypt)
+add_dtc_tool(test_pitch sapi ole32 oleaut32 advapi32)
 
 # sapi_probe drives the real DectalkDtc01SAPI.dll coclass end-to-end through
 # DllGetClassObject (no registration); it links dtc01common like every other
@@ -63,6 +64,14 @@ add_dtc_tool(cancel_probe sapi ole32 oleaut32 advapi32)
 # heard, against a site that plays back in real time and throttles Write the
 # way SAPI's audio queue does (see tools/latency_probe.cpp).
 add_dtc_tool(latency_probe sapi ole32 oleaut32 advapi32 winmm)
+
+# sapi_xml_probe: speaks SAPI XML through the real SpVoice into a WAV, the
+# engine loaded from beside the exe by a registration-free COM manifest -- so
+# markup such as <pitch absmiddle="15"> reaches the engine exactly as it does
+# from NVDA (see tools/sapi_xml_probe.cpp). The manifest source is embedded by
+# CMake's MSVC manifest support.
+add_executable(sapi_xml_probe tools/sapi_xml_probe.cpp tools/sapi_xml_probe.manifest)
+target_link_libraries(sapi_xml_probe PRIVATE sapi ole32 oleaut32 advapi32)
 
 # The in-proc COM server: DectalkTtsEngine.cpp and com.cpp already live in
 # dtc01common (linked below), so the DLL target itself is just the four
