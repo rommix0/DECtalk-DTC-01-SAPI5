@@ -3,14 +3,23 @@
 // the DECtalk DTC-01 configuration utility (dectalk_config.cpp) is built on.
 // Like test_settings.cpp, this runs against the real
 // HKCU\Software\DECtalkDTC01 key (there is no registry sandbox available to
-// a command-line tool); it cleans up after itself with reset_all().
+// a command-line tool), with the settings already there copied aside first and
+// put back when it ends (settings_backup.hpp).
 #include "dectalk_config_logic.hpp"
 #include "dectalk_config_res.h"
+#include "settings_backup.hpp"
 #include "../src/user_settings.hpp"
 #include <cassert>
+#include <cstdio>
 
 int wmain() {
     using namespace dectalk::settings;
+
+    const dectalk::test::SettingsBackup backup;
+    if (!backup.ok()) {
+        std::fputs("test_config_persist: could not back up HKCU\\Software\\DECtalkDTC01\n", stderr);
+        return 1;
+    }
 
     // Start from a clean slate so this test is not at the mercy of whatever
     // a previous run (or a real user) left behind.
@@ -94,8 +103,8 @@ int wmain() {
     assert(!load_apply_to_all_voices());
     assert(dectalk_config::set_apply_to_all_voices(true));
 
-    // Clean up every HKCU value this test (and dectalk_config.cpp) manage,
-    // so a developer's own settings are left exactly as they were.
+    // reset_all() clears every HKCU value this test (and dectalk_config.cpp)
+    // manage; the backup then puts back whatever was saved before the test.
     reset_all();
     assert(load_voice("paul", "v20").head_size == 50);
     assert(load_global().rate_percent == 100);
