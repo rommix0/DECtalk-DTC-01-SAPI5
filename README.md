@@ -90,6 +90,14 @@ change applies to all voices and the reset button becomes **Reset all
 voices**. Untick it to go back to adjusting one voice at a time — the voices
 keep what they have.
 
+**Allow SAPI5 apps to control rate, pitch and volume** is ticked by default:
+your screen reader or other SAPI5 program sets the rate, pitch and volume —
+including NVDA's higher pitch for capital letters — and the utility's Rate,
+Volume and Pitch sliders are unavailable. With NVDA, its pitch setting works
+like the utility's Pitch slider: 50 is the voice's own pitch. Untick the box
+to set those three in the utility instead; the program's rate, pitch and
+volume are then ignored. Rate boost works either way.
+
 ### Responsiveness
 
 Speech starts as soon as the firmware makes its first sound. The silence the
