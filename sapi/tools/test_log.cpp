@@ -1,10 +1,13 @@
-// Exercises DebugLog directly against the real HKCU\Software\DECtalkDTC01
-// key and the real %LOCALAPPDATA%\DECtalkDTC01\dectalk-sapi.log file (there
-// is no registry/filesystem sandbox available to a command-line tool). Same
-// HKCU cleanup discipline as sapi/tools/test_settings.cpp: read/save the
-// prior Logging value (or note it was absent) and restore it at the end.
+// Exercises DebugLog against the real HKCU\Software\DECtalkDTC01 key -- there
+// is no registry sandbox for a command-line tool, so the settings already
+// there are copied aside and put back when the test ends
+// (settings_backup.hpp). The log itself goes to a scratch folder: LOCALAPPDATA
+// is pointed there for this process, so the test never touches a real
+// %LOCALAPPDATA%\DECtalkDTC01\dectalk-sapi.log.
 #include "debug_log.h"
+#include "settings_backup.hpp"
 #include <cassert>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -12,25 +15,6 @@ namespace {
 
 constexpr wchar_t kRootKey[] = L"Software\\DECtalkDTC01";
 constexpr wchar_t kValueName[] = L"Logging";
-
-bool ReadLogging(DWORD& out_value)
-{
-    HKEY key = nullptr;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, kRootKey, 0, KEY_READ, &key) != ERROR_SUCCESS) {
-        return false;
-    }
-    DWORD value = 0;
-    DWORD size = sizeof(value);
-    DWORD type = 0;
-    const bool ok = RegQueryValueExW(key, kValueName, nullptr, &type,
-                                      reinterpret_cast<LPBYTE>(&value), &size) == ERROR_SUCCESS &&
-                    type == REG_DWORD;
-    RegCloseKey(key);
-    if (ok) {
-        out_value = value;
-    }
-    return ok;
-}
 
 void WriteLogging(DWORD value)
 {
@@ -95,15 +79,31 @@ long long FileSize(const std::wstring& path)
 
 int wmain()
 {
-    DWORD prior_value = 0;
-    const bool had_prior = ReadLogging(prior_value);
+    const dectalk::test::SettingsBackup backup;
+    if (!backup.ok()) {
+        std::fputs("test_log: could not back up HKCU\\Software\\DECtalkDTC01\n", stderr);
+        return 1;
+    }
 
-    // --- Logging ON: the marker must land in the file. ---
-    WriteLogging(1);
-    DebugLog::RefreshEnabled();
+    wchar_t temp[MAX_PATH];
+    assert(GetTempPathW(MAX_PATH, temp) != 0);
+    const std::wstring scratch = std::wstring(temp) + L"dectalk-test-log";
+    CreateDirectoryW(scratch.c_str(), nullptr);
+    assert(SetEnvironmentVariableW(L"LOCALAPPDATA", scratch.c_str()));
 
     const std::wstring path = LogPath();
     DeleteFileW(path.c_str());
+
+    // --- No Logging value: the log is off, and no file appears. ---
+    DeleteLogging();
+    DebugLog::RefreshEnabled();
+    assert(!DebugLog::Enabled());
+    DECTALK_LOG("off by default %d", 7);
+    assert(!FileExists(path));
+
+    // --- Logging = 1: the marker must land in the file. ---
+    WriteLogging(1);
+    DebugLog::RefreshEnabled();
 
     DECTALK_LOG("test marker %d", 42);
 
@@ -111,8 +111,9 @@ int wmain()
     std::string contents;
     assert(ReadFile(path, contents));
     assert(contents.find("test marker 42") != std::string::npos);
+    assert(contents.find("off by default") == std::string::npos);
 
-    // --- Logging OFF: a further line must not grow the file. ---
+    // --- Logging = 0: a further line must not grow the file. ---
     WriteLogging(0);
     DebugLog::RefreshEnabled();
 
@@ -123,14 +124,6 @@ int wmain()
 
     const long long size_after = FileSize(path);
     assert(size_after == size_before);
-
-    // --- Clean up: restore whatever was there before this test ran. ---
-    if (had_prior) {
-        WriteLogging(prior_value);
-    } else {
-        DeleteLogging();
-    }
-    DebugLog::RefreshEnabled();
 
     return 0;
 }

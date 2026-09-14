@@ -19,11 +19,13 @@
 // running in different hosts, can all append to the same per-user file
 // concurrently.
 //
-// Turn it off without reinstalling by creating this registry value:
-//   HKCU\Software\DECtalkDTC01  DWORD  Logging = 0
-// and back on with Logging = 1 (or by deleting the value -- absent means on).
-// The value is cached once per process on the hot path; see RefreshEnabled()
-// below for the test-only seam that re-reads it.
+// The log records the text every Speak call sends to the firmware -- whatever
+// a screen reader reads aloud -- so it stays off unless this registry value
+// turns it on:
+//   HKCU\Software\DECtalkDTC01  DWORD  Logging = 1
+// Logging = 0, or no value at all, keeps it off. The value is cached once per
+// process on the hot path, so a host picks up a change when it restarts; see
+// RefreshEnabled() below for the test-only seam that re-reads it.
 //
 // The file is capped and rotated to one previous copy, so leaving it on
 // cannot fill a disk during a long session.
@@ -59,14 +61,14 @@ inline int& CachedEnabled()
     return cached;
 }
 
-// Absent value (or absent key) means logging is ON by default.
+// Absent value (or absent key) means logging is off.
 inline int ReadRegistryEnabled()
 {
-    int result = 1;
+    int result = 0;
     HKEY key = nullptr;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\DECtalkDTC01", 0, KEY_READ, &key)
         == ERROR_SUCCESS) {
-        DWORD value = 1;
+        DWORD value = 0;
         DWORD size = sizeof(value);
         DWORD type = 0;
         if (RegQueryValueExW(key, L"Logging", nullptr, &type,
@@ -112,9 +114,9 @@ inline const char* ProcessTag()
         WideCharToMultiByte(CP_UTF8, 0, name, -1, narrow, sizeof(narrow) - 1, nullptr, nullptr);
         // _snprintf_s with _TRUNCATE (not sprintf_s): sprintf_s on overflow
         // invokes the invalid-parameter handler and aborts the process --
-        // fatal for a SAPI host whose exe basename happens to be long, and
-        // logging defaults ON. Truncating the tag is harmless; crashing the
-        // host on the first log line is not.
+        // fatal for a SAPI host whose exe basename happens to be long.
+        // Truncating the tag is harmless; crashing the host on the first log
+        // line is not.
         _snprintf_s(tag, sizeof(tag), _TRUNCATE, "%s/%d-bit pid %lu", narrow,
                     static_cast<int>(sizeof(void*) * 8), GetCurrentProcessId());
     }
