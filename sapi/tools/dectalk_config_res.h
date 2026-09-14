@@ -6,6 +6,9 @@
 
 #define IDC_VOICE                 1001
 
+// "Apply settings to all voices": voice-slider changes go to every voice.
+#define IDC_APPLY_ALL             1002
+
 // Per-voice sliders (0..100) and their live numeric readouts.
 #define IDC_PITCH                 1010
 #define IDC_PITCH_VAL             1011

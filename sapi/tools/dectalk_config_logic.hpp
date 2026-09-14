@@ -1,11 +1,11 @@
 // dectalk_config_logic.hpp - the control-value -> HKCU write logic for the
 // DECtalk DTC-01 configuration utility, factored out of dectalk_config.cpp
 // so it can be exercised with no window, dialog, or message loop at all
-// (see tools/test_config_persist.cpp). Every function here does exactly one
-// registry write via dectalk::settings and nothing else -- dialog_proc in
-// dectalk_config.cpp only decides *when* to call them (on WM_HSCROLL,
-// CBN_SELCHANGE, ...), and pure GUI concerns (updating a readout, disabling
-// a control) never happen in here.
+// (see tools/test_config_persist.cpp). Every function here only writes
+// registry values via dectalk::settings -- dialog_proc in dectalk_config.cpp
+// only decides *when* to call them (on WM_HSCROLL, CBN_SELCHANGE, ...), and
+// pure GUI concerns (updating a readout, disabling a control) never happen in
+// here.
 #pragma once
 
 #include "../src/user_settings.hpp"
@@ -62,6 +62,47 @@ inline constexpr voice_field VOICE_FIELDS[] = {
 // value is "v20" or "v18", matching dtc01::VoiceDef::firmware.
 [[nodiscard]] inline bool apply_global_firmware(const wchar_t* firmware) {
     return dectalk::settings::write_global_string(L"DefaultFirmware", firmware);
+}
+
+// ---------------------------------------------------------------------------
+// "Apply settings to all voices". Voice sliders are relative to each voice's
+// own factory default (50 is that voice's own value), so the same slider
+// positions on every voice adjust them all the same way -- which is what
+// someone who has tuned one voice wants the rest to get. "All voices" is
+// every entry in dtc01::VOICES, both firmware versions.
+// ---------------------------------------------------------------------------
+
+// apply_setting() for every voice. Returns false, writing nothing, if
+// control_id isn't a voice slider.
+[[nodiscard]] inline bool apply_setting_to_all_voices(int control_id, int value) {
+    bool ok = true;
+    for (const dtc01::VoiceDef& v : dtc01::VOICES) {
+        ok = apply_setting(v.key, v.firmware, control_id, value) && ok;
+    }
+    return ok;
+}
+
+// Gives every voice the sliders (voice_key, firmware) has now.
+[[nodiscard]] inline bool copy_voice_to_all_voices(const char* voice_key, const char* firmware) {
+    const dectalk::settings::VoiceSettings source =
+        dectalk::settings::load_voice(voice_key, firmware);
+    bool ok = true;
+    for (const dtc01::VoiceDef& v : dtc01::VOICES) {
+        ok = dectalk::settings::write_voice(v.key, v.firmware, source) && ok;
+    }
+    return ok;
+}
+
+// Every voice back to its own factory defaults.
+inline void reset_all_voices() {
+    for (const dtc01::VoiceDef& v : dtc01::VOICES) {
+        dectalk::settings::reset_voice(v.key, v.firmware);
+    }
+}
+
+// Remembers the tick box, so the utility reopens the way it was left.
+[[nodiscard]] inline bool set_apply_to_all_voices(bool on) {
+    return dectalk::settings::write_global_int(dectalk::settings::APPLY_TO_ALL_VOICES, on ? 1 : 0);
 }
 
 }  // namespace dectalk_config

@@ -220,6 +220,30 @@ inline void reset_voice(const char* voice_key, const char* firmware) {
     }
 }
 
+// Writes all of one voice's sliders, so it ends up matching `s` exactly.
+inline bool write_voice(const char* voice_key, const char* firmware, const VoiceSettings& s) {
+    bool ok = true;
+    for (const slider_field& f : SLIDER_FIELDS) {
+        ok = write_voice_int(voice_key, firmware, f.name, s.*(f.member)) && ok;
+    }
+    return ok;
+}
+
+// The configuration utility's "Apply settings to all voices" tick box. Only
+// the utility reads it: while it is ticked the utility writes each change to
+// every voice's own subkey, so the engine needs no notion of it.
+inline constexpr const wchar_t* APPLY_TO_ALL_VOICES = L"ApplyToAllVoices";
+
+[[nodiscard]] inline bool load_apply_to_all_voices() {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, ROOT_KEY, 0, KEY_READ, &key) != ERROR_SUCCESS) {
+        return false;
+    }
+    const bool on = detail::get_int(key, APPLY_TO_ALL_VOICES, 0, 0, 1) != 0;
+    RegCloseKey(key);
+    return on;
+}
+
 // Removes every value and subkey the utility manages, and only those: a
 // Logging value, if present, is a diagnostic setting rather than a speech
 // setting and stays put.
@@ -231,6 +255,7 @@ inline void reset_all() {
         RegDeleteValueW(key, L"VolumeDB");
         RegDeleteValueW(key, L"RateBoost");
         RegDeleteValueW(key, L"DefaultFirmware");
+        RegDeleteValueW(key, APPLY_TO_ALL_VOICES);
         RegCloseKey(key);
     }
     for (const dtc01::VoiceDef& v : dtc01::VOICES) {

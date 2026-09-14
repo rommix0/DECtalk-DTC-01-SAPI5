@@ -12,7 +12,10 @@
 // The dialog edits one voice at a time (the Voice box picks which), can
 // preview it through SAPI itself with "Play sample", and separately holds
 // the global settings -- rate/volume/rate-boost/default-firmware -- that
-// apply no matter which voice is speaking.
+// apply no matter which voice is speaking. "Apply settings to all voices"
+// makes the voice sliders act on every voice at once: ticking it gives all
+// voices the selected voice's settings, and while it stays ticked each
+// slider change, and "Reset all voices", lands on every voice.
 #include <windows.h>
 #include <commctrl.h>
 #include <sapi.h>
@@ -38,11 +41,15 @@ using dectalk::settings::VoiceSettings;
 
 namespace {
 
+constexpr const wchar_t* kTitle = L"DECtalk DTC-01 Configuration";
+
 // ---------------------------------------------------------------------------
-// State: which of the 18 static voices (dtc01::VOICES) is being edited.
+// State: which of the 18 static voices (dtc01::VOICES) is being edited, and
+// whether voice-slider changes go to every voice.
 // ---------------------------------------------------------------------------
 
 int g_voice_index = 0;
+bool g_apply_all = false;
 
 ISpVoice* g_preview = nullptr;
 
@@ -146,6 +153,8 @@ bool is_voice_slider(int id) {
 // point of a live readout. The trackbar's own pinned name already states
 // the control's range, so nothing is lost by leaving the readout's name
 // alone.
+//
+// The check box and buttons need nothing: their own text is their name.
 // ---------------------------------------------------------------------------
 
 void set_accessible_names(HWND dlg) {
@@ -183,6 +192,12 @@ void set_accessible_names(HWND dlg) {
 // Loading control state from the registry.
 // ---------------------------------------------------------------------------
 
+// The voice-reset button acts on every voice while "Apply settings to all
+// voices" is ticked, and its name says so.
+void update_reset_voice_label(HWND dlg) {
+    SetDlgItemTextW(dlg, IDC_RESET_VOICE, g_apply_all ? L"Rese&t all voices" : L"Reset &this voice");
+}
+
 void load_voice_controls(HWND dlg) {
     const dtc01::VoiceDef& v = current_voice();
     const VoiceSettings s = dectalk::settings::load_voice(v.key, v.firmware);
@@ -198,6 +213,10 @@ void load_global_controls(HWND dlg) {
     set_slider(dlg, IDC_RATEBOOST, g.rate_boost);
     SendDlgItemMessageW(dlg, IDC_FIRMWARE, CB_SETCURSEL,
                         g.default_firmware == "v18" ? 1 : 0, 0);
+
+    g_apply_all = dectalk::settings::load_apply_to_all_voices();
+    CheckDlgButton(dlg, IDC_APPLY_ALL, g_apply_all ? BST_CHECKED : BST_UNCHECKED);
+    update_reset_voice_label(dlg);
 }
 
 // ---------------------------------------------------------------------------
@@ -216,7 +235,7 @@ void play_sample(HWND dlg) {
     }
     if (FAILED(hr) || !g_preview) {
         MessageBoxW(dlg, L"Play sample requires the voices to be installed.",
-                    L"DECtalk DTC-01 Configuration", MB_OK | MB_ICONINFORMATION);
+                    kTitle, MB_OK | MB_ICONINFORMATION);
         return;
     }
 
@@ -241,7 +260,7 @@ void play_sample(HWND dlg) {
         // otherwise refused the token -- either way, tell the user rather
         // than crash the utility.
         MessageBoxW(dlg, L"Play sample requires the voices to be installed.",
-                    L"DECtalk DTC-01 Configuration", MB_OK | MB_ICONINFORMATION);
+                    kTitle, MB_OK | MB_ICONINFORMATION);
         return;
     }
 
@@ -327,11 +346,44 @@ void on_slider_changed(HWND dlg, HWND slider) {
     set_slider(dlg, id, value);
 
     if (is_voice_slider(id)) {
-        const dtc01::VoiceDef& v = current_voice();
-        (void)dectalk_config::apply_setting(v.key, v.firmware, id, value);
+        if (g_apply_all) {
+            (void)dectalk_config::apply_setting_to_all_voices(id, value);
+        } else {
+            const dtc01::VoiceDef& v = current_voice();
+            (void)dectalk_config::apply_setting(v.key, v.firmware, id, value);
+        }
     } else {
         (void)dectalk_config::apply_global_setting(id, value);
     }
+}
+
+// The tick box has already changed state when this runs (BS_AUTOCHECKBOX).
+// Ticking it overwrites every other voice's settings, so that is confirmed
+// first and undone if declined; unticking just stops changes spreading.
+void on_apply_all_clicked(HWND dlg) {
+    const bool checked = IsDlgButtonChecked(dlg, IDC_APPLY_ALL) == BST_CHECKED;
+    if (checked) {
+        const dtc01::VoiceDef& v = current_voice();
+        std::wstring message = L"Give all ";
+        message += std::to_wstring(dtc01::voice_count());
+        message += L" DECtalk voices the voice settings of ";
+        message += v.display;
+        message += L" (";
+        message += dectalk::sapi::detail::firmware_label(v.firmware);
+        message += L")?\n\nThis replaces the voice settings of every other voice. While this box "
+                   L"is ticked, each change you make to pitch, inflection, head size, "
+                   L"breathiness, richness, smoothness, loudness, laryngealization or "
+                   L"assertiveness applies to all voices.";
+        if (MessageBoxW(dlg, message.c_str(), kTitle,
+                        MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) {
+            CheckDlgButton(dlg, IDC_APPLY_ALL, BST_UNCHECKED);
+            return;
+        }
+        (void)dectalk_config::copy_voice_to_all_voices(v.key, v.firmware);
+    }
+    g_apply_all = checked;
+    (void)dectalk_config::set_apply_to_all_voices(checked);
+    update_reset_voice_label(dlg);
 }
 
 INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -359,14 +411,22 @@ INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wparam, LPARAM lparam) {
             }
             return TRUE;
         }
+        if (id == IDC_APPLY_ALL && code == BN_CLICKED) {
+            on_apply_all_clicked(dlg);
+            return TRUE;
+        }
         if (id == IDC_FIRMWARE && code == CBN_SELCHANGE) {
             const int cur = static_cast<int>(SendDlgItemMessageW(dlg, IDC_FIRMWARE, CB_GETCURSEL, 0, 0));
             (void)dectalk_config::apply_global_firmware(cur == 1 ? L"v18" : L"v20");
             return TRUE;
         }
         if (id == IDC_RESET_VOICE && code == BN_CLICKED) {
-            const dtc01::VoiceDef& v = current_voice();
-            dectalk::settings::reset_voice(v.key, v.firmware);
+            if (g_apply_all) {
+                dectalk_config::reset_all_voices();
+            } else {
+                const dtc01::VoiceDef& v = current_voice();
+                dectalk::settings::reset_voice(v.key, v.firmware);
+            }
             load_voice_controls(dlg);
             return TRUE;
         }
@@ -374,7 +434,7 @@ INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wparam, LPARAM lparam) {
             if (MessageBoxW(dlg,
                             L"Reset every voice and every speech setting to the "
                             L"DECtalk DTC-01 defaults?",
-                            L"DECtalk DTC-01 Configuration",
+                            kTitle,
                             MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) == IDYES) {
                 dectalk::settings::reset_all();
                 load_voice_controls(dlg);
