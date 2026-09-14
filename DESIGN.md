@@ -1626,6 +1626,12 @@ ends in 271 blocks (6.8s) instead of 12000 (300s).
 Both fixes are kept: Bug 1 removes the trigger, Bug 2 removes the failure
 mode. Either alone would have hidden this particular report.
 
+**Why it surfaced now:** nothing here is new — the held-sample behaviour and
+the splitter predate v1.8 support. Making v1.8 selectable in the settings
+panel is what made it reachable, and it is the same lesson as §21: the
+constants above the emulator (`SILENCE_THRESHOLD`, `FIRMWARE_LINE_BYTES`,
+the boot windows) are all v2.0 measurements.
+
 ## 23. SAPI speech latency (2026-09-14) — from ~680 ms to ~40 ms
 
 Report: arrowing quickly through a list, DTC-01 took 250–500 ms to respond.
@@ -1833,11 +1839,37 @@ Checked through the real engine, 64-bit and 32-bit (`sapi_probe`, with
 log file was created; with `Logging = 1` each wrote its `Speak` line.
 `compare_renders.py` against 1.2.0: all 54 renders byte-identical.
 
-**Why it surfaced now:** nothing here is new — the held-sample behaviour and
-the splitter predate v1.8 support. Making v1.8 selectable in the settings
-panel is what made it reachable, and it is the same lesson as §21: the
-constants above the emulator (`SILENCE_THRESHOLD`, `FIRMWARE_LINE_BYTES`,
-the boot windows) are all v2.0 measurements.
+## 26. The diagnostic log in the configuration utility (2026-09-14)
+
+§25 left `Logging` a registry value read once per process, so turning the log
+on for a bug report took a `reg` command and a screen reader restart. The
+configuration utility now has **Diagnostic log for bug reports**, a combo box
+at the end of the Global group: **Off**, or **On (saves the text of everything
+spoken)**, so the entry a screen reader reads out says what the log keeps. It
+writes `Logging` = 1 or 0 as it changes, and opens showing the saved value.
+
+A setting in the utility has to take effect the way the others do, on the next
+utterance, so `DectalkTtsEngine::Speak` now starts with
+`DebugLog::RefreshEnabled()`: one registry read per utterance, before anything
+that utterance logs, a machine started for it included. The per-line path still
+reads only the cached flag, which is now a `std::atomic<int>`, since one host
+can have several voices speaking, and logging, on different threads.
+
+`user_settings.hpp` has `LOGGING` and `load_logging()` for the utility, with
+`debug_log.h`'s rule: any nonzero `REG_DWORD` is on. `debug_log.h` keeps its
+own reader so it stays a standalone header, and `test_log` checks the two
+agree. `reset_all()` now removes `Logging` as well — §25 kept it, when only a
+`reg` command set it — so **Reset all settings**, whose prompt now says it
+includes the diagnostic log, turns the log off.
+
+**Verification.** `test_log_engine` (new) speaks four words through one engine,
+kept loaded as a screen reader keeps it: with no value, then `Logging` = 1, 0
+and 1. The log, in a scratch `LOCALAPPDATA`, holds exactly the two words spoken
+while it was on, and there is no file before that; x86 and x64 both pass.
+`test_config_persist` covers `set_logging()` and `reset_all()`. The dialog was
+driven by script: label and entries, accessible name, tab order after Default
+firmware, the saved values, opening with `Logging` = 1, and Reset all settings.
+`compare_renders.py` against 1.2.0: all 54 renders byte-identical.
 
 ## 8. Open follow-ups (not yet resolved — do not assume)
 

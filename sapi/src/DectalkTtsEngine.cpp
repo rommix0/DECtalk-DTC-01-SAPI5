@@ -632,6 +632,12 @@ STDMETHODIMP DectalkTtsEngine::Speak(
     }
 
     try {
+        // First, so everything this utterance logs -- a machine started for it
+        // included -- follows the setting as it is now: turning the diagnostic
+        // log on or off in the configuration utility takes effect with this
+        // utterance rather than when the host restarts.
+        DebugLog::RefreshEnabled();
+
         // One lock for the whole render: the 68000 core is single-instance and
         // process-global (design spec §3 / §4.3 step 1).
         std::lock_guard<std::mutex> lk(dtc01::exec_mutex());
