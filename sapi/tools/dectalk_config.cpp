@@ -21,6 +21,12 @@
 // leaves those three to the screen reader or other SAPI5 app; the Rate,
 // Volume and Pitch sliders are then disabled. Unticked, the engine ignores the
 // app's rate, pitch and volume and those sliders decide instead.
+//
+// "Diagnostic log for bug reports" turns the engine's diagnostic log
+// (%LOCALAPPDATA%\DECtalkDTC01\dectalk-sapi.log) on or off. It is Off unless
+// chosen, because the log saves the text of everything DECtalk speaks, and its
+// On entry says so. Like the other settings it takes effect on the next
+// utterance.
 #include <windows.h>
 #include <commctrl.h>
 #include <sapi.h>
@@ -186,6 +192,7 @@ void set_accessible_names(HWND dlg) {
         { IDC_VOLUME,                 L"Volume adjustment, -40 to 12 dB" },
         { IDC_RATEBOOST,              L"Rate boost, 0 to 200 percent" },
         { IDC_FIRMWARE,               L"Default firmware" },
+        { IDC_LOGGING,                L"Diagnostic log for bug reports" },
     };
     for (const auto& n : names) {
         if (HWND ctl = GetDlgItem(dlg, n.id)) {
@@ -229,6 +236,8 @@ void load_global_controls(HWND dlg) {
     set_slider(dlg, IDC_RATEBOOST, g.rate_boost);
     SendDlgItemMessageW(dlg, IDC_FIRMWARE, CB_SETCURSEL,
                         g.default_firmware == "v18" ? 1 : 0, 0);
+    SendDlgItemMessageW(dlg, IDC_LOGGING, CB_SETCURSEL,
+                        dectalk::settings::load_logging() ? 1 : 0, 0);
 
     g_app_control = g.app_control;
     CheckDlgButton(dlg, IDC_APP_CONTROL, g_app_control ? BST_CHECKED : BST_UNCHECKED);
@@ -348,6 +357,11 @@ void on_init(HWND dlg) {
     SendMessageW(fw_combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"v2.0"));
     SendMessageW(fw_combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"v1.8"));
 
+    HWND log_combo = GetDlgItem(dlg, IDC_LOGGING);
+    SendMessageW(log_combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Off"));
+    SendMessageW(log_combo, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(L"On (saves the text of everything spoken)"));
+
     for (const slider_range& s : SLIDERS) {
         init_slider(dlg, s);
     }
@@ -446,6 +460,11 @@ INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wparam, LPARAM lparam) {
             (void)dectalk_config::apply_global_firmware(cur == 1 ? L"v18" : L"v20");
             return TRUE;
         }
+        if (id == IDC_LOGGING && code == CBN_SELCHANGE) {
+            const int cur = static_cast<int>(SendDlgItemMessageW(dlg, IDC_LOGGING, CB_GETCURSEL, 0, 0));
+            (void)dectalk_config::set_logging(cur == 1);
+            return TRUE;
+        }
         if (id == IDC_RESET_VOICE && code == BN_CLICKED) {
             if (g_apply_all) {
                 dectalk_config::reset_all_voices();
@@ -458,8 +477,8 @@ INT_PTR CALLBACK dialog_proc(HWND dlg, UINT msg, WPARAM wparam, LPARAM lparam) {
         }
         if (id == IDC_RESET_ALL && code == BN_CLICKED) {
             if (MessageBoxW(dlg,
-                            L"Reset every voice and every speech setting to the "
-                            L"DECtalk DTC-01 defaults?",
+                            L"Reset every voice and every setting, including the "
+                            L"diagnostic log, to the DECtalk DTC-01 defaults?",
                             kTitle,
                             MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) == IDYES) {
                 dectalk::settings::reset_all();

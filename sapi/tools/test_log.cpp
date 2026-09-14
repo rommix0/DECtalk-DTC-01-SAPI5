@@ -3,7 +3,8 @@
 // there are copied aside and put back when the test ends
 // (settings_backup.hpp). The log itself goes to a scratch folder: LOCALAPPDATA
 // is pointed there for this process, so the test never touches a real
-// %LOCALAPPDATA%\DECtalkDTC01\dectalk-sapi.log.
+// %LOCALAPPDATA%\DECtalkDTC01\dectalk-sapi.log. The configuration utility's
+// reader, dectalk::settings::load_logging(), must agree with DebugLog's.
 #include "debug_log.h"
 #include "settings_backup.hpp"
 #include <cassert>
@@ -98,12 +99,15 @@ int wmain()
     DeleteLogging();
     DebugLog::RefreshEnabled();
     assert(!DebugLog::Enabled());
+    assert(!dectalk::settings::load_logging());
     DECTALK_LOG("off by default %d", 7);
     assert(!FileExists(path));
 
     // --- Logging = 1: the marker must land in the file. ---
     WriteLogging(1);
     DebugLog::RefreshEnabled();
+    assert(DebugLog::Enabled());
+    assert(dectalk::settings::load_logging());
 
     DECTALK_LOG("test marker %d", 42);
 
@@ -116,6 +120,8 @@ int wmain()
     // --- Logging = 0: a further line must not grow the file. ---
     WriteLogging(0);
     DebugLog::RefreshEnabled();
+    assert(!DebugLog::Enabled());
+    assert(!dectalk::settings::load_logging());
 
     const long long size_before = FileSize(path);
     assert(size_before >= 0);
@@ -124,6 +130,12 @@ int wmain()
 
     const long long size_after = FileSize(path);
     assert(size_after == size_before);
+
+    // --- Any nonzero DWORD is on, for DebugLog and load_logging() alike. ---
+    WriteLogging(0xFFFFFFFF);
+    DebugLog::RefreshEnabled();
+    assert(DebugLog::Enabled());
+    assert(dectalk::settings::load_logging());
 
     return 0;
 }

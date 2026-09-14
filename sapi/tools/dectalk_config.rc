@@ -81,7 +81,7 @@ BEGIN
                     TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 21, 317, 170, 15
     RTEXT           "", IDC_ASSERTIVENESS_VAL, 195, 306, 30, 8
 
-    GROUPBOX        "Global", -1, 245, 24, 228, 172
+    GROUPBOX        "Global", -1, 245, 24, 228, 204
 
     // First in the group because it decides whether the Rate and Volume
     // sliders below (and each voice's Pitch) are used at all; while it is
@@ -106,6 +106,11 @@ BEGIN
 
     LTEXT           "De&fault firmware:", -1, 252, 156, 110, 8
     COMBOBOX        IDC_FIRMWARE, 252, 167, 100, 60, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+
+    // Off unless chosen: the log saves the text of everything DECtalk speaks,
+    // and the On entry says so where a screen reader reads it out.
+    LTEXT           "Diagnostic log for b&ug reports:", -1, 252, 188, 160, 8
+    COMBOBOX        IDC_LOGGING, 252, 199, 214, 60, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
 
     PUSHBUTTON      "Reset &this voice", IDC_RESET_VOICE, 7, 372, 90, 14
     PUSHBUTTON      "Reset all setti&ngs", IDC_RESET_ALL, 102, 372, 100, 14

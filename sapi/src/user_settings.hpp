@@ -253,9 +253,30 @@ inline constexpr const wchar_t* APPLY_TO_ALL_VOICES = L"ApplyToAllVoices";
     return on;
 }
 
-// Removes every value and subkey the utility manages, and only those: a
-// Logging value, if present, is a diagnostic setting rather than a speech
-// setting and stays put.
+// The diagnostic log (debug_log.h), which saves the text of everything the
+// engine speaks: off unless this is a nonzero REG_DWORD. The configuration
+// utility's "Diagnostic log for bug reports" box reads and writes it here;
+// debug_log.h reads it with the same rule itself, so it stays a standalone
+// header, and the engine re-reads it at the start of every utterance.
+inline constexpr const wchar_t* LOGGING = L"Logging";
+
+[[nodiscard]] inline bool load_logging() {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, ROOT_KEY, 0, KEY_READ, &key) != ERROR_SUCCESS) {
+        return false;
+    }
+    DWORD type = 0;
+    DWORD raw = 0;
+    DWORD size = sizeof(raw);
+    const bool on = RegQueryValueExW(key, LOGGING, nullptr, &type, reinterpret_cast<LPBYTE>(&raw),
+                                     &size) == ERROR_SUCCESS &&
+                    type == REG_DWORD && raw != 0;
+    RegCloseKey(key);
+    return on;
+}
+
+// Removes every value and subkey the utility manages, and only those. That
+// includes Logging, so Reset all settings also turns the diagnostic log off.
 inline void reset_all() {
     HKEY key = nullptr;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, ROOT_KEY, 0,
@@ -266,6 +287,7 @@ inline void reset_all() {
         RegDeleteValueW(key, L"DefaultFirmware");
         RegDeleteValueW(key, APPLY_TO_ALL_VOICES);
         RegDeleteValueW(key, APP_CONTROL);
+        RegDeleteValueW(key, LOGGING);
         RegCloseKey(key);
     }
     for (const dtc01::VoiceDef& v : dtc01::VOICES) {

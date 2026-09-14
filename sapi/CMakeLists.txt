@@ -46,6 +46,7 @@ add_dtc_tool(dump_pipeline)
 add_dtc_tool(test_speech_shaper)
 add_dtc_tool(test_state_snapshot bcrypt)
 add_dtc_tool(test_pitch sapi ole32 oleaut32 advapi32)
+add_dtc_tool(test_log_engine sapi ole32 oleaut32 advapi32)
 
 # sapi_probe drives the real DectalkDtc01SAPI.dll coclass end-to-end through
 # DllGetClassObject (no registration); it links dtc01common like every other

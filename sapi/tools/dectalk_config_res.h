@@ -41,6 +41,8 @@
 #define IDC_FIRMWARE              1036
 // "Allow SAPI5 apps to control rate, pitch and volume".
 #define IDC_APP_CONTROL           1037
+// "Diagnostic log for bug reports": Off or On.
+#define IDC_LOGGING               1038
 
 // Buttons. Close uses the stock IDOK id so Enter/Esc/the title-bar X and
 // Alt-F4 all reach the same dialog_proc branch that ends the dialog.

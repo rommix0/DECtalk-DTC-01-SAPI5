@@ -112,4 +112,10 @@ inline void reset_all_voices() {
     return dectalk::settings::write_global_int(dectalk::settings::APP_CONTROL, on ? 1 : 0);
 }
 
+// "Diagnostic log for bug reports". The engine re-reads it at the start of
+// every utterance, so the log starts or stops with the next thing spoken.
+[[nodiscard]] inline bool set_logging(bool on) {
+    return dectalk::settings::write_global_int(dectalk::settings::LOGGING, on ? 1 : 0);
+}
+
 }  // namespace dectalk_config

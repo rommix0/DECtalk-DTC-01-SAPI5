@@ -112,6 +112,15 @@ int wmain() {
     assert(load_global().app_control);
     assert(dectalk_config::set_app_control(false));
 
+    // "Diagnostic log for bug reports" is Off until chosen, round-trips
+    // through load_logging(), and reset_all() turns it off again.
+    assert(!load_logging());
+    assert(dectalk_config::set_logging(true));
+    assert(load_logging());
+    assert(dectalk_config::set_logging(false));
+    assert(!load_logging());
+    assert(dectalk_config::set_logging(true));
+
     // reset_all() clears every HKCU value this test (and dectalk_config.cpp)
     // manage; the backup then puts back whatever was saved before the test.
     reset_all();
@@ -119,6 +128,7 @@ int wmain() {
     assert(load_global().rate_percent == 100);
     assert(!load_apply_to_all_voices());
     assert(load_global().app_control);
+    assert(!load_logging());
 
     return 0;
 }

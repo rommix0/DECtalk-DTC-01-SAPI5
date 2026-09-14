@@ -1,6 +1,7 @@
 #pragma once
 
 #include <windows.h>
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <ctime>
@@ -21,11 +22,13 @@
 //
 // The log records the text every Speak call sends to the firmware -- whatever
 // a screen reader reads aloud -- so it stays off unless this registry value
-// turns it on:
+// turns it on (the configuration utility's "Diagnostic log for bug reports"
+// box writes it):
 //   HKCU\Software\DECtalkDTC01  DWORD  Logging = 1
-// Logging = 0, or no value at all, keeps it off. The value is cached once per
-// process on the hot path, so a host picks up a change when it restarts; see
-// RefreshEnabled() below for the test-only seam that re-reads it.
+// Logging = 0, or no value at all, keeps it off. The value is cached, so the
+// per-line hot path never touches the registry, and the engine re-reads it at
+// the start of every utterance (RefreshEnabled() below): a change takes effect
+// on the next thing spoken, without restarting the host.
 //
 // The file is capped and rotated to one previous copy, so leaving it on
 // cannot fill a disk during a long session.
@@ -55,9 +58,11 @@ inline bool BuildLogPath(wchar_t* path, size_t size, const wchar_t* suffix)
 
 namespace detail {
 
-inline int& CachedEnabled()
+// Atomic: the engine refreshes it at the start of each utterance, and a host
+// can have several voices speaking, and so logging, on different threads.
+inline std::atomic<int>& CachedEnabled()
 {
-    static int cached = -1;
+    static std::atomic<int> cached{-1};
     return cached;
 }
 
@@ -83,23 +88,26 @@ inline int ReadRegistryEnabled()
 
 }  // namespace detail
 
-// Read once per process: a hot path should not touch the registry per line.
+// Read on first use and then cached: a hot path should not touch the registry
+// per line.
 inline bool Enabled()
 {
-    int& cached = detail::CachedEnabled();
-    if (cached < 0) {
-        cached = detail::ReadRegistryEnabled();
+    std::atomic<int>& cached = detail::CachedEnabled();
+    int value = cached.load(std::memory_order_relaxed);
+    if (value < 0) {
+        value = detail::ReadRegistryEnabled();
+        cached.store(value, std::memory_order_relaxed);
     }
-    return cached == 1;
+    return value == 1;
 }
 
-// Test-only seam: re-reads HKCU\Software\DECtalkDTC01\Logging and updates the
-// cached flag, so a test can flip Logging within a single process and see
-// DECTALK_LOG react on the very next call. Nothing on the DECTALK_LOG hot
-// path calls this -- Enabled() above still only reads the registry once.
+// Re-reads HKCU\Software\DECtalkDTC01\Logging into the cached flag.
+// DectalkTtsEngine::Speak calls it once per utterance, so turning the log on
+// or off takes effect on the next thing spoken; tests call it to flip Logging
+// within one process. Nothing on the per-line DECTALK_LOG path calls it.
 inline void RefreshEnabled()
 {
-    detail::CachedEnabled() = detail::ReadRegistryEnabled();
+    detail::CachedEnabled().store(detail::ReadRegistryEnabled(), std::memory_order_relaxed);
 }
 
 inline const char* ProcessTag()
