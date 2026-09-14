@@ -110,6 +110,27 @@ firmware versions; see [DESIGN.md §23](DESIGN.md) for the measurements. Long
 text is fed to the firmware in pieces it accepts, so long sentences are
 spoken rather than dropped.
 
+### Diagnostic log
+
+The voices can keep a diagnostic log for bug reports. It records the text
+DECtalk speaks, so it is off unless you turn it on. To turn it on, run this in
+a Command Prompt and restart your screen reader:
+
+```
+reg add HKCU\Software\DECtalkDTC01 /v Logging /t REG_DWORD /d 1 /f
+```
+
+The log is written to `%LOCALAPPDATA%\DECtalkDTC01\dectalk-sapi.log`. To turn
+it off again, delete the value:
+
+```
+reg delete HKCU\Software\DECtalkDTC01 /v Logging /f
+```
+
+Versions before 1.2.1 kept the log on by default, and those logs are not
+deleted automatically. To remove one, delete `dectalk-sapi.log` from that
+folder, and `dectalk-sapi.1.log` if it is there.
+
 ## Building
 
 Needs Microsoft's Visual Studio 2022 (Build Tools are enough) for building the SAPI wrapper and the DTC-01 engine for Windows, and Inno Setup 6 for compiling the installation program.

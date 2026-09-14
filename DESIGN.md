@@ -1805,6 +1805,34 @@ driven by script through the new check box: ticked by default, the three
 sliders disabled and skipped in tab order, the saved value, and Reset all
 settings.
 
+## 25. The diagnostic log is off unless turned on (2026-09-14)
+
+The engine, the configuration utility and the native core share a diagnostic
+log, `%LOCALAPPDATA%\DECtalkDTC01\dectalk-sapi.log` (`sapi/src/debug_log.h`).
+It was on unless `HKCU\Software\DECtalkDTC01\Logging` was set to 0, and every
+`Speak()` call logs the text it sends to the firmware. So every machine running
+the engine kept a record of whatever its screen reader read aloud — documents,
+e-mail, chat — up to 4 MB plus one rotated copy.
+
+Now no value (or no key) means off, and `Logging = 1` turns it on:
+
+    reg add HKCU\Software\DECtalkDTC01 /v Logging /t REG_DWORD /d 1 /f
+
+The value is still read once per process, so a screen reader picks up a change
+when it restarts. What a line records is unchanged, so a log turned on for a
+bug report is as useful as before. Logs written by earlier versions are left
+where they are; the README says where to find them.
+
+`test_log` now also checks that with no value nothing is written and no file
+is created. It points `LOCALAPPDATA` at a scratch folder for its own process,
+so it no longer deletes the real log of whoever runs it, and it keeps the
+settings key with `settings_backup.hpp`.
+
+Checked through the real engine, 64-bit and 32-bit (`sapi_probe`, with
+`LOCALAPPDATA` pointed at a scratch folder): with no value both spoke and no
+log file was created; with `Logging = 1` each wrote its `Speak` line.
+`compare_renders.py` against 1.2.0: all 54 renders byte-identical.
+
 **Why it surfaced now:** nothing here is new — the held-sample behaviour and
 the splitter predate v1.8 support. Making v1.8 selectable in the settings
 panel is what made it reachable, and it is the same lesson as §21: the
