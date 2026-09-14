@@ -20,7 +20,7 @@
 ; this file.
 
 #define AppName "DECtalk DTC-01 SAPI5 Voices"
-#define AppVersion "1.2.0"
+#define AppVersion "1.2.1"
 #define AppPublisher "DECtalk DTC-01 project"
 #define OutputDir "..\output"
 
